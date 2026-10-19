@@ -1,0 +1,9 @@
+- insert:
+    - id: dsh-onebot
+      name: dsh-onebot-voice-bridge
+    - id: companion-group-social
+      name: dsh-onebot-voice-bridge/group
+    - id: companion-voice
+      name: dsh-onebot-voice-bridge/voice
+    - id: qq-bridge-settings
+      name: dsh-onebot-voice-bridge/settings

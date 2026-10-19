@@ -1,0 +1,20 @@
+{
+  "name": "qq-bot-dsh-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "doctor": "node scripts/workspace.mjs doctor",
+    "test": "node scripts/workspace.mjs test",
+    "test:portable": "node scripts/workspace.mjs test-portable",
+    "typecheck": "node scripts/workspace.mjs typecheck",
+    "build": "node scripts/workspace.mjs build",
+    "build:bundle": "node scripts/workspace.mjs bundle",
+    "start:standalone": "node standalone/server.mjs",
+    "test:standalone": "npm --prefix standalone test",
+    "test:voice-local": "node standalone/scripts/voice-smoke.mjs"
+  }
+}

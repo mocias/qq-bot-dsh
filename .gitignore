@@ -1,0 +1,54 @@
+# Local dependencies and caches
+node_modules/
+.npm-cache/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Private data and machine-specific state
+.env
+.env.*
+!.env.example
+*.private.*
+*.local.*
+.memory/
+.runtime/
+profiles/
+storages/
+sessions/
+media/
+*.log
+*.bak-*
+.latest-build
+
+# Imported deployment is preserved locally for migration and comparison.
+# Audit scripts/configuration before promoting individual files to source control.
+/dsh-qq-deploy/*
+!/dsh-qq-deploy/README.md
+
+# Build outputs and local verification reports
+/work/
+/artifacts/
+*.tgz
+.DS_Store
+Thumbs.db
+
+# Private runtime and local deployment artifacts
+credentials*
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite*
+*.db
+*.wav
+*.mp3
+*.ogg
+*.zip
+*.7z
+*.bin
+*.safetensors
+*.ndjson
+*.jsonl
+coverage/

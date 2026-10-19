@@ -1,0 +1,56 @@
+{
+  "package": "dsh-plugin-memory",
+  "version": "0.10.0-qq.6",
+  "modules": [
+    {
+      "name": "boot.js",
+      "sha256": "f05a285a382483a30aaffd20ee4bf961db6d30140c3d28356fda02e6a9089c5e",
+      "unchanged": true
+    },
+    {
+      "name": "scaffold.js",
+      "sha256": "a121c65b56c15530445dc9f561dacfbba7ec6847c08ad16c1dfbc442b40824db",
+      "unchanged": true
+    },
+    {
+      "name": "pages.js",
+      "sha256": "2c48b2822963e9d73a90e6468268c4f5907adf1c13ae137156ee4c614dc9f94d",
+      "unchanged": true
+    },
+    {
+      "name": "insights.js",
+      "sha256": "05319feb7976799e15f5e577daace616f94b5783c8476ed9f677de0d5c3dca2a",
+      "unchanged": true
+    },
+    {
+      "name": "graph.js",
+      "sha256": "ad381aeb7d910309d3ad3874847c3f4e0a5f5deee450ccacd92f908285ea9cda",
+      "unchanged": true
+    },
+    {
+      "name": "graph-layout.js",
+      "sha256": "598bb98f8db8078813d2b779c501baf47512bb456456a5ec872754ade81c1438",
+      "unchanged": true
+    },
+    {
+      "name": "index-page.js",
+      "sha256": "3daf2b8399d7d960310032ccdd03041e29107adad3ad1913d8ffbf4601f9bdfc",
+      "unchanged": true
+    },
+    {
+      "name": "checkup.js",
+      "sha256": "c7012a266dab9ae48dd1bdd30d257f4c6be1281a660d898d8b655a66f26e9fee",
+      "unchanged": true
+    },
+    {
+      "name": "skill.js",
+      "sha256": "59064f272047ac2758050bb7c8b4197f56965908e91edc78ac5b4de632958433",
+      "unchanged": true
+    }
+  ],
+  "skill": {
+    "sha256": "6e110ce222186d217e7e046d1bea9de61b2ac0d854cd46144eeeb6606b4c0710",
+    "unchanged": true
+  },
+  "cli": "scripts/original-memory.mjs: only import paths adapted"
+}

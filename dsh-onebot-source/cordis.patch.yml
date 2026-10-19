@@ -1,0 +1,32 @@
+# dsh-onebot cordis.patch.yml —— dsh.bundle.patch（随 npm 包发布，宿主直接加载）
+#
+# 声明：package.json `dsh.bundle.patch = "./cordis.patch.yml"`。
+# 宿主读取点：dsh-app-boot/lib/index.js:497（bundlePatchFiles，patch 为字符串或
+# 字符串数组，包相对路径）、:924-928（loadProfileDirectory 读 dsh.bundle 并
+# loadOverlayPatches 加载本文件）。本文件必须保持「顶层 YAML 数组」形态
+# （parsePatchList 校验，:3546）。
+#
+# 行说明：
+# 1. `dsh-onebot` 主条目——挂载插件主入口（exports "."）。name 用裸包名
+#    `dsh-onebot-qq`：插件经 pnpm 装进 profile node_modules 后由运行时解析。
+#    禁止对同一插件文件二次 insert（如再为 settings-remote 挂一次 lib/index.js）：
+#    同一插件文件双实例注册 = 冲突崩溃循环（DEVLOG.md:70 实测事故）。
+#    注意：config 覆盖须挂 patch 文档顶层的同 id 行（insert 块内行 configEditor
+#    不可寻址，设置页写入会被 compose 自检拒绝——T6 实测，v043-next-acceptance.md R1③）。
+# 2. `onebot-settings-remote`——host-plane 行（T3）：挂载 onebotSettings
+#    Typert Remote（exports "./settings-remote"）。
+#
+# 手工部署形态（非 bundle，本文件之外）：从部署副本绝对路径挂载时，在
+# profile 层 <DSH_HOME>/profiles/web/cordis.patch.yml 的既有 insert 块加：
+#   - id: dsh-onebot
+#     name: /vol2/@appshare/Harness/dsh-plugins/dsh-onebot/lib/index.js
+#   - id: onebot-settings-remote
+#     name: /vol2/@appshare/Harness/dsh-plugins/dsh-onebot/lib/settings-remote.js
+# （相对名 ./ 开头会按宿主 anchorInsertedPluginNames 锚定到 patch 文件所在目录，
+# 绝对路径 name 不受锚定影响。）
+- insert:
+  - id: dsh-onebot
+    name: 'dsh-onebot-qq'
+    # config: { mode: reverse, host: 127.0.0.1, port: 8643, ... }
+  - id: onebot-settings-remote
+    name: 'dsh-onebot-qq/settings-remote'

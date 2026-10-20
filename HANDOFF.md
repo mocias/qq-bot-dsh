@@ -12,7 +12,7 @@
 
 `QQ / NapCat OneBot v11 → standalone Node 服务 → DSH Web API → DSH Agent / 模型`
 
-`standalone/` 是独立进程，不安装为 DSH 插件；DSH 仍必须另行运行。协议参考 qq-bridge 的 `a56164e70a0521a7829138a42eee76066fde2b8b` 版本，没有引入其完整业务运行时。当前 standalone 版本为 0.6.0。
+`standalone/` 是独立进程，不安装为 DSH 插件；DSH 仍必须另行运行。协议参考 qq-bridge 的 `a56164e70a0521a7829138a42eee76066fde2b8b` 版本，没有引入其完整业务运行时。当前 standalone 版本为 0.6.1。
 
 关键入口：
 
@@ -27,6 +27,8 @@
 - `standalone/lib/voice-service.mjs`：在本地语音基础上增加 MiMo TTS/ASR、参考录音及共享服务切换；详见 `docs/VOICE-0.6.md`。
 
 ## 0.6 语音设置
+
+0.6.1 将面板分为“语音与通话”“连接与配置”“会话与聊天”“人设与记忆”。连接与聊天设置各自保存本页字段，原记忆库查看移入人设与记忆；语音和 QQ 后端逻辑不变。
 
 已加入本地/MiMo 下拉选择、用户密钥输入与隐藏、预置音色、参考录音上传选择预览及独立保存。QQ 和试听共用服务。旧配置默认本地；不自动启用云端。测试使用模拟 MiMo API，真实 MiMo 密钥、音质与 QQ 云语音联调等待用户配置，不能声称已经通过真实云端验证。
 

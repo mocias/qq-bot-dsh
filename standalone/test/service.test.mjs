@@ -42,6 +42,12 @@ test('HTTP panel authenticates, rejects cross-site writes and retains saved sett
   t.after(async()=>{app.bridge.stop();await new Promise(resolve=>app.server.close(resolve));fs.rmSync(runtime,{recursive:true,force:true});});
   const origin=new URL(app.loginUrl()).origin;
   assert.equal((await fetch(origin+'/api/status')).status,401);
+  const welcome=await fetch(origin+'/');
+  assert.equal(welcome.status,401);assert.match(welcome.headers.get('content-type'),/text\/html/);
+  const welcomeText=await welcome.text();assert.match(welcomeText,/打开面板\.cmd/);assert.ok(!welcomeText.includes(app.token));
+  assert.equal((await fetch(origin+'/welcome.css')).status,200);
+  assert.equal((await fetch(origin+'/login?token=expired')).status,401);
+  assert.equal((await fetch(origin+'/api/status',{headers:{cookie:'qqrsi=expired'}})).status,401);
   const login=await fetch(app.loginUrl(),{redirect:'manual'});assert.equal(login.status,303);
   const cookie=login.headers.get('set-cookie').split(';')[0];
   const headers={cookie,'Content-Type':'application/json','X-QQ-RSI':'panel',Origin:origin};
@@ -60,6 +66,16 @@ test('voice rejects malformed/oversized uploads and overlapping jobs before star
     voice.busy=true;await assert.rejects(voice.synthesize('hello',defaults),/正在运行/);
     assert.throws(()=>voice.audio('../../secret'));
   }finally{fs.rmSync(runtime,{recursive:true,force:true});}
+});
+test('panels on separate ports do not replace each others browser cookie',async t=>{
+ const runtime=temp(),voice={status:()=>({})},apps=[createApp({runtime:path.join(runtime,'a'),voice}),createApp({runtime:path.join(runtime,'b'),voice})];
+ t.after(async()=>{for(const app of apps){app.bridge.stop();await new Promise(r=>app.server.close(r));}fs.rmSync(runtime,{recursive:true,force:true});});
+ for(const app of apps){app.server.listen(0,'127.0.0.1');await once(app.server,'listening');}
+ const cookies=[];
+ for(const app of apps){const login=await fetch(app.loginUrl(),{redirect:'manual'});cookies.push(login.headers.get('set-cookie').split(';')[0]);}
+ assert.notEqual(cookies[0].split('=')[0],cookies[1].split('=')[0]);
+ for(const app of apps)assert.equal((await fetch(new URL(app.loginUrl()).origin+'/api/status',{headers:{cookie:cookies.join('; ')}})).status,200);
+ assert.equal((await fetch(new URL(apps[0].loginUrl()).origin+'/api/status',{headers:{cookie:cookies[1]}})).status,401);
 });
 async function mockDsh(t){
   let nextSession=0;const followers=new Map(), requests=[];

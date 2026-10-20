@@ -73,14 +73,21 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
     res.setHeader('Referrer-Policy','no-referrer'); res.setHeader('X-Frame-Options','DENY');
     res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     const origin='http://127.0.0.1:'+server.address().port;
+    const cookieName='qqrsi_'+server.address().port;
     if (req.headers.host !== new URL(origin).host) { json(res,403,{error:'请使用 127.0.0.1 打开面板'}); return; }
     const url=new URL(req.url,origin);
     if (req.headers.origin && req.headers.origin !== origin) { json(res,403,{error:'不允许跨站请求'}); return; }
     if (req.method==='GET' && url.pathname==='/login' && url.searchParams.get('token')===token) {
-      res.writeHead(303,{'Location':'/','Set-Cookie':`qqrsi=${cookie}; HttpOnly; SameSite=Strict; Path=/`}); res.end(); return;
+      res.writeHead(303,{'Location':'/','Set-Cookie':`${cookieName}=${cookie}; HttpOnly; SameSite=Strict; Path=/`}); res.end(); return;
     }
-    if (!(req.headers.cookie || '').split(';').some(x=>x.trim()===`qqrsi=${cookie}`)) {
-      json(res,401,{error:'请使用启动终端显示的面板链接登录'}); return;
+    if(req.method==='GET'&&url.pathname==='/welcome.css'){
+      res.writeHead(200,{'Content-Type':'text/css; charset=utf-8'});res.end(fs.readFileSync(path.join(here,'public','welcome.css')));return;
+    }
+    if (!(req.headers.cookie || '').split(';').some(x=>x.trim()===`${cookieName}=${cookie}`)) {
+      if(req.method==='GET'&&['/','/login'].includes(url.pathname)){
+        res.writeHead(401,{'Content-Type':'text/html; charset=utf-8'});res.end(fs.readFileSync(path.join(here,'public','welcome.html')));return;
+      }
+      json(res,401,{error:'面板登录已失效，请双击项目目录中的“打开面板.cmd”重新打开。配置和记忆仍保存在本机。'}); return;
     }
     if (req.method==='POST' && (req.headers.origin!==origin || req.headers['x-qq-rsi']!=='panel')) { json(res,403,{error:'请求来源校验失败'}); return; }
     try {

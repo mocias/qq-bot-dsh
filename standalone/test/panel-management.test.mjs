@@ -17,8 +17,82 @@ import {scopeOf} from '../lib/memory.mjs';
 import {Knowledge} from '../lib/knowledge.mjs';
 import {SystemLog} from '../lib/system-log.mjs';
 import {recoverMemoryReset} from '../lib/reset-memory.mjs';
+import {VoiceProfiles} from '../lib/voice-profiles.mjs';
 function temp(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'qq-panel-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
 function wav(){const b=Buffer.alloc(364);b.write('RIFF');b.writeUInt32LE(356,4);b.write('WAVEfmt ',8);b.writeUInt32LE(16,16);b.writeUInt16LE(1,20);b.writeUInt16LE(1,22);b.writeUInt32LE(16000,24);b.writeUInt32LE(32000,28);b.writeUInt16LE(2,32);b.writeUInt16LE(16,34);b.write('data',36);b.writeUInt32LE(320,40);return b;}
+test('named voice profiles bind independent persona snapshots, preserve global credentials and survive preset edits/deletion',async t=>{
+ const {api,runtime,app,voice,origin}=await panel(t),a='100000001/private/100000002',b='100000001/group/100000003',c='100000009/private/100000002';
+ await api('/api/config',{botQQ:'100000001',privateUsers:['100000002'],groups:['100000003']});
+ assert.equal((await fetch(origin+'/api/voice/profiles')).status,401);
+ const settings={voiceProvider:'mimo',mimoTtsMode:'design',mimoDesign:'清亮而温暖',mimoStyle:'温柔'};
+ let saved=await api('/api/voice/profiles/save',{name:'设计 A',settings,revision:0});
+ assert.equal(saved.status,200);const id=saved.data.profile.id;
+ assert.equal((await api('/api/voice/profiles/save',{name:'非法',settings:{...settings,mimoApiKey:'SECRET'},revision:1})).status,400);
+ let info=(await api('/api/manage?key='+a)).data;
+ assert.equal((await api('/api/manage/voice',{key:a,profileId:id,revision:info.personaVoice.revision})).status,200);
+ assert.equal((await api('/api/manage/voice',{key:a,profileId:id,revision:info.personaVoice.revision})).status,400);
+ app.bridge.config=validate({mimoApiKey:'SHARED-SECRET'});
+ assert.equal(app.bridge.configFor({key:a}).mimoDesign,settings.mimoDesign);
+ assert.equal(app.bridge.configFor({key:a}).mimoApiKey,'SHARED-SECRET');
+ assert.equal(app.bridge.configFor({key:b}).mimoDesign,'');assert.equal(app.bridge.configFor({key:c}).mimoDesign,'');
+ assert.equal(new VoiceProfiles(runtime).resolve(app.bridge.config,a).mimoTtsMode,'design');
+ saved=await api('/api/voice/profiles/save',{id,name:'修改后的设计',settings:{...settings,mimoDesign:'低沉沉稳'},revision:1});
+ assert.equal(saved.status,200);assert.equal(app.bridge.configFor({key:a}).mimoDesign,settings.mimoDesign);
+ await api('/api/voice/profiles/delete',{id,revision:2});assert.equal(app.bridge.configFor({key:a}).mimoDesign,settings.mimoDesign);
+ assert.ok(!JSON.stringify((await api('/api/manage?key='+a)).data).includes('SHARED-SECRET'));
+ await api('/api/voice/profiles/restore',{id,revision:3});
+ info=(await api('/api/manage?key='+a)).data;
+ await api('/api/manage/voice',{key:a,profileId:id,revision:info.personaVoice.revision});
+ assert.equal(app.bridge.configFor({key:a}).mimoDesign,'低沉沉稳');
+ info=(await api('/api/manage?key='+a)).data;
+ await api('/api/manage/voice',{key:a,profileId:'',revision:info.personaVoice.revision});
+ assert.equal(app.bridge.configFor({key:a}).voiceProvider,'local');
+ // Preview is selected explicitly and does not alter the saved default.
+ voice.synthesize=async(text,cfg)=>({text,model:cfg.mimoTtsMode,description:cfg.mimoDesign});
+ const preview=await api('/api/voice/synthesize',{text:'hello',profileId:id});
+ assert.equal(preview.data.model,'design');assert.equal(preview.data.description,'低沉沉稳');
+ assert.equal((await api('/api/status')).data.config.voiceProvider,'local');
+ const files=[fs.readFileSync(path.join(runtime,'voice-profiles.private.json'),'utf8'),fs.readFileSync(new MemoryStore(runtime,a).safe('.runtime/persona-voice.json'),'utf8')];
+ assert.ok(files.every(text=>!text.includes('SHARED-SECRET')&&!text.includes('mimoApiKey')));
+});
+test('clone reference remains protected by presets and persona snapshots; reset removes only the persona selection',async t=>{
+ const {api,voice,runtime,app}=await panel(t),key='100000001/private/100000002',ref=voice.uploadReference(wav(),'sample');
+ await api('/api/config',{botQQ:'100000001',privateUsers:['100000002']});
+ const settings={voiceProvider:'mimo',mimoTtsMode:'clone',mimoReferenceId:ref.id};
+ const created=await api('/api/voice/profiles/save',{name:'克隆',settings,revision:0});assert.equal(created.status,200);
+ const id=created.data.profile.id,info=(await api('/api/manage?key='+key)).data;
+ await api('/api/manage/voice',{key,profileId:id,revision:info.personaVoice.revision});
+ assert.equal((await api('/api/voice/reference/delete',{id:ref.id})).status,400);
+ await api('/api/voice/profiles/delete',{id,revision:1});
+ assert.equal((await api('/api/voice/reference/delete',{id:ref.id})).status,400);
+ app.bridge.status.state='running';assert.equal((await api('/api/manage/voice',{key,profileId:'',revision:(await api('/api/manage?key='+key)).data.personaVoice.revision})).status,400);app.bridge.status.state='stopped';
+ await api('/api/manage/reset',{scope:key,confirm:'RESET '+key});
+ assert.equal(new VoiceProfiles(runtime).selection(key).saved,null);
+ assert.equal((await api('/api/voice/reference/delete',{id:ref.id})).status,200);
+ assert.equal((await api('/api/voice/profiles/restore',{id,revision:2})).status,400);
+ await api('/api/voice/reference/restore',{id:ref.id});
+ assert.equal((await api('/api/voice/profiles/restore',{id,revision:2})).status,200);
+});
+test('QQ outgoing voice uses each persona model and audio options without cross-chat leakage',async t=>{
+ const {api,app,voice,runtime}=await panel(t),a='100000001/private/100000002',b='100000001/group/100000003';
+ await api('/api/config',{botQQ:'100000001',privateUsers:['100000002'],groups:['100000003']});
+ const profiles=new VoiceProfiles(runtime),ref=voice.uploadReference(wav(),'reference');
+ const design=profiles.save({name:'design',settings:{voiceProvider:'mimo',mimoTtsMode:'design',mimoDesign:'清亮温暖'},revision:0});
+ const clone=profiles.save({name:'clone',settings:{voiceProvider:'mimo',mimoTtsMode:'clone',mimoReferenceId:ref.id},revision:1});
+ profiles.assign({key:a,profileId:design.id,revision:profiles.selection(a).revision});
+ profiles.assign({key:b,profileId:clone.id,revision:profiles.selection(b).revision});
+ const calls=[];voice.fetch=async(url,options)=>{calls.push(JSON.parse(options.body));return Response.json({choices:[{finish_reason:'stop',message:{audio:{data:wav().toString('base64')}}}]});};
+ app.bridge.config=validate({botQQ:'100000001',mimoApiKey:'shared-test-key',voiceQuietMode:'never',chatPolicy:{group:{voiceSend:true}}});
+ for(const key of [a,b]){
+  const route={key,id:key.split('/')[2],group:key.includes('/group/'),messageId:'test',text:'你好'};
+  const plan=await app.bridge.media.outgoing({reply:'',qq:{voice:'你好'}},route,{workspace:runtime},app.bridge.configFor(route));
+  assert.equal(plan.params.message[0].type,'record');
+ }
+ assert.equal(calls[0].model,'mimo-v2.5-tts-voicedesign');assert.equal(Object.hasOwn(calls[0].audio,'voice'),false);
+ assert.equal(calls[0].messages[0].content,'清亮温暖');
+ assert.equal(calls[1].model,'mimo-v2.5-tts-voiceclone');assert.match(calls[1].audio.voice,/^data:audio\/wav;base64,/);
+ assert.ok(!JSON.stringify(calls[1]).includes('清亮温暖'));
+});
 test('memory reset archives only requested scope, invalidates old sessions and creates a fresh workspace epoch',async t=>{
  const {api,app,runtime}=await panel(t),key='100000001/private/100000002',other='100000001/group/100000003',historic='100000009/private/100000002';
  await api('/api/config',{botQQ:'100000001',privateUsers:['100000002'],groups:['100000003']});

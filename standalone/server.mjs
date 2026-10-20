@@ -21,6 +21,7 @@ import {syncNapcat} from './lib/napcat-sync.mjs';
 import {QQControl} from './lib/qq-control.mjs';
 import {SystemLog} from './lib/system-log.mjs';
 import {recoverMemoryReset,resetMemories} from './lib/reset-memory.mjs';
+import {VoiceProfiles} from './lib/voice-profiles.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export function createApp({ root = path.dirname(here), runtime = path.join(here,'.runtime'), voice: injectedVoice, bridge: injectedBridge, qqControl: injectedControl } = {}) {
@@ -32,6 +33,10 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
   bridge.systemLog=systemLog;
   const desktop=new DesktopQQ(runtime),management=new Management(runtime);
   const qqControl=injectedControl||new QQControl();
+  const voiceProfiles=new VoiceProfiles(runtime);
+  function profilePayload(){const state=voiceProfiles.read();return {...state,profiles:state.profiles.map(p=>({...p,status:voice.status({...config,...p.settings})}))};}
+  function checkProfile(settings){if(settings.voiceProvider==='mimo'&&settings.mimoTtsMode==='clone')voice.reference(settings.mimoReferenceId);}
+  function previewConfig(input){return input.profileId?{...config,...voiceProfiles.get(input.profileId).settings}:config;}
   let napcatSyncBusy=false,managementNetwork=0;
   async function syncInterface(){
     idleConfig();napcatSyncBusy=true;
@@ -47,7 +52,7 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
     if(!keys().includes(key))throw Error('请选择已配置或已有记忆的聊天');
     if(writing&&(bridge.jobs?.has(key)||bridge.queues?.has(key)||bridge.maintenance?.has(key)))throw Error('该聊天正在处理消息，请稍后编辑');
   }
-  function managed(key){checkKey(key);return {detail:management.inspect(key),knowledge:new Knowledge(runtime,key).read(),policy:policyView(config,key).effective,lifecycle:(bridge.summary?.()??[]).filter(s=>s.key===key)};}
+  function managed(key){checkKey(key);return {detail:management.inspect(key),personaVoice:voiceProfiles.selection(key),knowledge:new Knowledge(runtime,key).read(),policy:policyView(config,key).effective,lifecycle:(bridge.summary?.()??[]).filter(s=>s.key===key)};}
   function policyScopes(){
     return ['private','group',...(config.botQQ?[
       ...config.privateUsers.map(id=>config.botQQ+'/private/'+id),
@@ -106,6 +111,7 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         json(res,200,policyPayload(scope));return;
       }
       if(req.method==='GET'&&url.pathname==='/api/voice/references'){json(res,200,{references:voice.listReferences(),deleted:voice.listReferences({deleted:true})});return;}
+      if(req.method==='GET'&&url.pathname==='/api/voice/profiles'){json(res,200,profilePayload());return;}
       if(req.method==='GET'&&url.pathname.startsWith('/api/voice/reference/')){
         const {meta,bytes}=voice.reference(url.pathname.slice('/api/voice/reference/'.length));
         res.writeHead(200,{'Content-Type':meta.format==='mp3'?'audio/mpeg':'audio/wav','Content-Length':bytes.length});res.end(bytes);return;
@@ -146,6 +152,15 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         systemLog.record('memory.reset',{component:'memory',count:result.count});
         json(res,200,result);return;
       }
+      if(url.pathname==='/api/voice/profiles/save'){
+        idleConfig();const settings=voiceProfiles.settings(input.settings);checkProfile(settings);
+        const profile=voiceProfiles.save({...input,settings});json(res,200,{profile,...profilePayload()});return;
+      }
+      if(url.pathname==='/api/voice/profiles/delete'||url.pathname==='/api/voice/profiles/restore'){
+        idleConfig();const restore=url.pathname.endsWith('/restore');
+        if(restore){const profile=voiceProfiles.read().profiles.find(p=>p.id===input.id);if(!profile)throw Error('预设不存在');checkProfile(profile.settings);}
+        voiceProfiles.archive({...input,restore});json(res,200,profilePayload());return;
+      }
       if(url.pathname==='/api/manage/open'||url.pathname==='/api/chat-target'){
         if(!config.botQQ||!['private','group'].includes(input.kind)||typeof input.id!=='string'||!/^\d{5,20}$/.test(input.id))throw Error('请先配置机器人账号，并填写有效的好友 QQ 或群号');
         const key=config.botQQ+'/'+input.kind+'/'+input.id;
@@ -163,7 +178,10 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
       if(url.pathname.startsWith('/api/manage/')){
         if(['/api/manage/research','/api/manage/collect','/api/manage/favorites'].includes(url.pathname)){managementNetwork++;res.once('finish',()=>managementNetwork--);}
         checkKey(input.key,true);const knowledge=new Knowledge(runtime,input.key);
-        if(url.pathname==='/api/manage/persona')management.savePersona(input);
+        if(url.pathname==='/api/manage/voice'){
+          idleConfig();if(input.profileId)checkProfile(voiceProfiles.get(input.profileId).settings);
+          voiceProfiles.assign(input);
+        }else if(url.pathname==='/api/manage/persona')management.savePersona(input);
         else if(url.pathname==='/api/manage/page')management.savePage(input);
         else if(url.pathname==='/api/manage/knowledge')knowledge.update(input);
         else if(url.pathname==='/api/manage/research'){
@@ -193,7 +211,7 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         json(res,200,policyPayload(input.scope));
       }else if (url.pathname==='/api/config'||url.pathname==='/api/voice/config') {
         idleConfig();
-        const voiceFields=['voice','model','voiceProvider','mimoApiKey','mimoTtsMode','mimoVoice','mimoReferenceId','mimoStyle','mimoAsrLanguage','clearMimoApiKey'];
+        const voiceFields=['voice','model','voiceProvider','mimoApiKey','mimoTtsMode','mimoVoice','mimoReferenceId','mimoStyle','mimoDesign','mimoAsrLanguage','clearMimoApiKey'];
         const patch=url.pathname==='/api/voice/config'?Object.fromEntries(Object.entries(input).filter(([key])=>voiceFields.includes(key))):input;
         const next=validate(patch,config); voice.checkConfig?.(next);
         writeJson(configFile,next); config=next;
@@ -207,12 +225,13 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
       } else if(url.pathname==='/api/voice/reference/delete'||url.pathname==='/api/voice/reference/restore'){
         idleConfig();const restore=url.pathname.endsWith('/restore');
         if(!restore&&config.mimoTtsMode==='clone'&&config.mimoReferenceId===input.id)throw Error('这是已保存配置正在使用的参考录音，请先选择其他音色或预置音色并保存');
+        if(!restore&&voiceProfiles.referenceUsed(input.id))throw Error('语音预设或某个人设仍在使用此录音，请先修改相应配置');
         const reference=voice.archiveReference(input.id,restore);
         if(!restore&&config.mimoReferenceId===input.id){const next=validate({mimoReferenceId:''},config);writeJson(configFile,next);config=next;}
         json(res,200,{reference});
-      } else if (url.pathname==='/api/voice/synthesize') json(res,200,await voice.synthesize(input.text,config));
+      } else if (url.pathname==='/api/voice/synthesize') json(res,200,await voice.synthesize(input.text,previewConfig(input)));
       else if (url.pathname==='/api/voice/transcribe') {
-        json(res,200,await voice.transcribe(audioInput(input),config));
+        json(res,200,await voice.transcribe(audioInput(input),previewConfig(input)));
       } else if (url.pathname==='/api/dsh/probe') {
         const dsh=new DshClient(config);
         try { const presets=await dsh.probe(); json(res,200,{ok:true,presets}); } finally { dsh.close(); }

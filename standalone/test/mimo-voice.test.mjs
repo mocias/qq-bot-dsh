@@ -34,6 +34,19 @@ test('preset synthesis uses official model, assistant text, api-key header and v
   assert.deepEqual(JSON.parse(request.body),{model:'mimo-v2.5-tts',messages:[{role:'user',content:'温柔'},{role:'assistant',content:'你好'}],audio:{format:'wav',voice:'茉莉'},stream:false});
   assert.deepEqual(voice.audio(result.id),wav());assert.equal(voice.busy,false);
 });
+test('voice design requires text instructions and omits audio.voice even with a stale reference',async t=>{
+ let payload,calls=0;
+ const voice=service(t,async(url,options)=>{calls++;payload=JSON.parse(options.body);return response({audio:{data:wav().toString('base64')}});});
+ const design={...config,mimoTtsMode:'design',mimoDesign:'温暖清亮的年轻女声，语速舒缓',mimoStyle:'自然地讲述',mimoReferenceId:'00000000-0000-0000-0000-000000000000'};
+ assert.equal(voice.status(design).ttsReady,true);
+ const result=await voice.synthesize('你好',design);
+ assert.equal(result.model,'mimo-v2.5-tts-voicedesign');
+ assert.equal(payload.model,result.model);assert.equal(Object.hasOwn(payload.audio,'voice'),false);
+ assert.equal(payload.audio.optimize_text_preview,false);
+ assert.deepEqual(payload.messages,[{role:'user',content:design.mimoDesign+'\n'+design.mimoStyle},{role:'assistant',content:'你好'}]);
+ await assert.rejects(voice.synthesize('你好',{...design,mimoDesign:''}),/音色设计描述/);
+ assert.equal(calls,1);assert.equal(voice.status({...design,mimoDesign:''}).ttsReady,false);
+});
 test('reference upload is local, persistent, bounded and used in every clone request',async t=>{
   const requests=[];const voice=service(t,async(url,options)=>{requests.push(JSON.parse(options.body));return response({audio:{data:wav().toString('base64')}});});
   const ref=voice.uploadReference(wav(),'我的声音');

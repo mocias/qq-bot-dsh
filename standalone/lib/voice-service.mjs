@@ -71,11 +71,12 @@ export class VoiceService extends LocalVoice{
     if(config.voiceProvider!=='mimo')return;
     if(!config.mimoApiKey)throw Error('请先填写并保存 MiMo API Key');
     if(config.mimoTtsMode==='clone')this.reference(config.mimoReferenceId);
+    if(config.mimoTtsMode==='design'&&!config.mimoDesign?.trim())throw Error('请填写音色设计描述，无需上传录音');
   }
   status(config){
     if(config.voiceProvider!=='mimo')return {...super.status(config),provider:'local'};
-    let referenceReady=config.mimoTtsMode!=='clone';
-    if(!referenceReady)try{this.reference(config.mimoReferenceId);referenceReady=true;}catch{}
+    let referenceReady=config.mimoTtsMode==='design'?!!config.mimoDesign?.trim():config.mimoTtsMode!=='clone';
+    if(config.mimoTtsMode==='clone')try{this.reference(config.mimoReferenceId);referenceReady=true;}catch{}
     return {busy:this.busy,provider:'mimo',engine:'MiMo API',model:'mimo-v2.5-asr',
       asrReady:!!config.mimoApiKey,ttsReady:!!config.mimoApiKey&&referenceReady,
       credentialVerified:false};
@@ -112,10 +113,12 @@ export class VoiceService extends LocalVoice{
       let voice=config.mimoVoice;
       if(config.mimoTtsMode==='clone'){const {meta,bytes}=this.reference(config.mimoReferenceId);voice=`data:audio/${meta.format};base64,${bytes.toString('base64')}`;}
       const messages=[];
-      if(config.mimoStyle)messages.push({role:'user',content:config.mimoStyle});
+      const instruction=[config.mimoTtsMode==='design'?config.mimoDesign:'',config.mimoStyle].filter(Boolean).join('\n');
+      if(instruction)messages.push({role:'user',content:instruction});
       messages.push({role:'assistant',content:text});
-      const model=config.mimoTtsMode==='clone'?'mimo-v2.5-tts-voiceclone':'mimo-v2.5-tts';
-      const {message}=await this.call({model,messages,audio:{format:'wav',voice},stream:false},config);
+      const model=config.mimoTtsMode==='clone'?'mimo-v2.5-tts-voiceclone':config.mimoTtsMode==='design'?'mimo-v2.5-tts-voicedesign':'mimo-v2.5-tts';
+      const audio=config.mimoTtsMode==='design'?{format:'wav',optimize_text_preview:false}:{format:'wav',voice};
+      const {message}=await this.call({model,messages,audio,stream:false},config);
       const encoded=message?.audio?.data;
       if(typeof encoded!=='string'||encoded.length>Math.ceil(MAX_AUDIO/3)*4||!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded))throw Error('MiMo 返回的音频无效');
       const bytes=Buffer.from(encoded,'base64');try{wavInfo(bytes);}catch{throw Error('MiMo 返回的 WAV 音频无效');}

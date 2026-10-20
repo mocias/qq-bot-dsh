@@ -11,7 +11,7 @@ export const defaults = {
   privateUsers: [], groups: [], privatePreset: '', groupPreset: '',
   voice: 'Microsoft Huihui Desktop', model: 'small',
   voiceProvider: 'local', mimoApiKey: '', mimoTtsMode: 'preset', mimoVoice: 'mimo_default',
-  mimoReferenceId: '', mimoStyle: '', mimoAsrLanguage: 'auto',
+  mimoReferenceId: '', mimoStyle: '', mimoDesign: '', mimoAsrLanguage: 'auto',
   memoryEnabled: true, memoryIdleMinutes: 30, rotateAfterCompactions: 15,
   memoryAutoInject:true,memoryRegisterSkill:true,memoryActiveOnly:false,memoryBootMaxChars:6000,memoryPageMaxChars:10000,proactiveMaxPerSession:0,
   rotationEnabled: true, privateMessagePolicy: 'steer', groupMessagePolicy: 'queue',
@@ -63,11 +63,12 @@ export function validate(input, previous = defaults) {
   if (input.clearQqToken === true) out.qqToken = '';
   if (input.clearMimoApiKey === true) out.mimoApiKey = '';
   if(!['local','mimo'].includes(out.voiceProvider))throw Error('请选择本地模式或 MiMo API');
-  if(!['preset','clone'].includes(out.mimoTtsMode))throw Error('请选择预置音色或参考录音');
+  if(!['preset','design','clone'].includes(out.mimoTtsMode))throw Error('请选择预置音色、音色设计或音色克隆');
   if(!['mimo_default','冰糖','茉莉','苏打','白桦','Mia','Chloe','Milo','Dean'].includes(out.mimoVoice))throw Error('请选择支持的 MiMo 音色');
   if(!['auto','zh','en'].includes(out.mimoAsrLanguage))throw Error('识别语言无效');
   if(out.mimoReferenceId&&!/^[0-9a-f-]{36}$/.test(out.mimoReferenceId))throw Error('参考录音编号无效');
   if(out.mimoStyle.length>500||/[\r\n]/.test(out.mimoApiKey))throw Error('MiMo 配置格式不正确');
+  if(out.mimoDesign.length>2000)throw Error('音色描述最多 2000 字');
   out.dshUrl = localUrl(out.dshUrl, ['http:', 'https:']);
   out.qqUrl = localUrl(out.qqUrl, ['ws:', 'wss:']);
   if(out.botQQ && !/^\d{5,20}$/.test(out.botQQ)) throw Error('机器人 QQ 号码格式不正确');

@@ -93,12 +93,59 @@ $('target-remove').onclick=()=>action($('target-remove'),async()=>{
   const result=await request('/api/chat-target',{kind,id,remove:true});fill(result.config);
   policyDrafts.delete(key);await loadPolicy(kind,true);notice('已移除聊天接入，历史记忆仍保留。');
 });
-const voiceFields=['voiceProvider','voice','model','mimoApiKey','mimoTtsMode','mimoVoice','mimoReferenceId','mimoStyle','mimoAsrLanguage'];
+const voiceFields=['voiceProvider','voice','model','mimoApiKey','mimoTtsMode','mimoVoice','mimoReferenceId','mimoStyle','mimoDesign','mimoAsrLanguage'];
+let voiceProfileData={revision:0,profiles:[]},voiceFormDirty=false,defaultVoiceConfig=null;
+function voiceSettings(){return Object.fromEntries(voiceFields.filter(k=>k!=='mimoApiKey').map(k=>[k,$(k).value]));}
+async function loadVoiceProfiles(selected=$('voice-profile').value){
+  voiceProfileData=await request('/api/voice/profiles');
+  $('voice-profile').replaceChildren(new Option('全局默认语音配置',''));
+  $('voice-profile-deleted').replaceChildren(new Option('选择要恢复的预设',''));
+  for(const p of voiceProfileData.profiles)(p.deletedAt?$('voice-profile-deleted'):$('voice-profile')).append(new Option(p.name,p.id));
+  $('voice-profile').value=selected;updateProfileButtons();
+}
+function updateProfileButtons(){
+ const selected=$('voice-profile').value;
+ $('voice-profile-save').disabled=!selected;$('voice-profile-delete').disabled=!selected;
+ $('voice-profile-restore').disabled=$('voice-profile-deleted').options.length<=1;
+ $('voice-preview-context').textContent='下方试听使用已保存的'+(selected?'预设：'+($('voice-profile').selectedOptions[0]?.textContent??''):'全局默认')+'。不会使用未保存的编辑，也不会发送 QQ。';
+}
+async function loadProfileEditor(){
+ const profile=voiceProfileData.profiles.find(p=>p.id===$('voice-profile').value&&!p.deletedAt);
+ const config={...defaultVoiceConfig,...(profile?.settings??{})};
+ await fillVoice(config,false);
+ $('voice-profile-name').value=profile?.name??'';
+ $('voice-profile-state').textContent=profile?'已载入预设；修改后可更新或另存，不会自动影响已绑定人设。':'正在编辑全局默认；也可以另存为命名预设。';
+ updateProfileButtons();voiceFormDirty=false;$('voice-profile').dataset.loaded=$('voice-profile').value;
+}
+$('voice-profile-name').addEventListener('input',()=>{voiceFormDirty=true;});
+$('voice-profile').onchange=async()=>{
+ if(voiceFormDirty&&!await confirmAction('切换预设会放弃下方尚未保存的语音编辑，继续？')){$('voice-profile').value=$('voice-profile').dataset.loaded??'';return;}
+ try{await loadProfileEditor();$('voice-profile').dataset.loaded=$('voice-profile').value;}catch(e){notice(e.message,true);}
+};
+async function saveVoiceProfile(copy){
+ if($('mimoApiKey').value.trim())throw Error('密钥尚未保存，请先点击“保存为全局默认与密钥”。预设不保存密钥。');
+ const result=await request('/api/voice/profiles/save',{id:copy?undefined:$('voice-profile').value,name:$('voice-profile-name').value,settings:voiceSettings(),revision:voiceProfileData.revision});
+ await loadVoiceProfiles(result.profile.id);await loadProfileEditor();$('voice-profile').dataset.loaded=result.profile.id;
+ notice('语音预设已保存。可在人设与记忆中选择；已保存的人设副本保持不变。');
+}
+$('voice-profile-create').onclick=()=>action($('voice-profile-create'),()=>saveVoiceProfile(true));
+$('voice-profile-save').onclick=()=>action($('voice-profile-save'),()=>saveVoiceProfile(false));
+$('voice-profile-delete').onclick=()=>action($('voice-profile-delete'),async()=>{
+ if(!await confirmAction('删除此公共语音预设？可以恢复，已保存的人设语音副本保持不变。'))return;
+ await request('/api/voice/profiles/delete',{id:$('voice-profile').value,revision:voiceProfileData.revision});
+ await loadVoiceProfiles('');await loadProfileEditor();notice('预设已移至已删除列表，人设独立副本保留。');
+});
+$('voice-profile-restore').onclick=()=>action($('voice-profile-restore'),async()=>{
+ const id=$('voice-profile-deleted').value;if(!id)throw Error('请选择要恢复的预设');
+ await request('/api/voice/profiles/restore',{id,revision:voiceProfileData.revision});await loadVoiceProfiles(id);await loadProfileEditor();notice('语音预设已恢复。');
+});
 function voiceOptions(){
   const mimo=$('voiceProvider').value==='mimo';
   $('local-options').hidden=mimo;$('mimo-options').hidden=!mimo;
   const clone=$('mimoTtsMode').value==='clone';
-  $('preset-options').hidden=clone;$('clone-options').hidden=!clone;
+  const design=$('mimoTtsMode').value==='design';
+  $('preset-options').hidden=clone||design;$('clone-options').hidden=!clone;$('design-options').hidden=!design;
+  $('mimoDesign').required=mimo&&design;
 }
 function referencePreview(){
   const id=$('mimoReferenceId').value;
@@ -115,17 +162,21 @@ async function loadReferences(selected){
   for(const ref of deleted)$('reference-deleted').append(new Option(ref.name+' · '+ref.format.toUpperCase(),ref.id));
   $('reference-restore').disabled=!deleted.length;$('reference-delete').disabled=!select.value;
 }
-async function fillVoice(config){
+async function fillVoice(config,asDefault=true){
+  if(asDefault){defaultVoiceConfig=config;await loadVoiceProfiles('');$('voice-profile').dataset.loaded='';}
   for(const field of voiceFields)if(field!=='mimoReferenceId')$(field).value=field==='mimoApiKey'?'':config[field];
   $('mimo-key-state').textContent=config.mimoApiKeyConfigured?'已保存（不回显）':'未配置';
   $('mimo-clear').hidden=!config.mimoApiKeyConfigured;
   await loadReferences(config.mimoReferenceId);voiceOptions();
-  $('voice-saved-state').textContent='已保存：'+(config.voiceProvider==='mimo'?'MiMo API':'本地模式');
+  $('voice-saved-state').textContent='已载入：'+(config.voiceProvider==='mimo'?'MiMo API':'本地模式')+'；修改后请选择保存为默认或存为预设。';voiceFormDirty=false;
 }
 function paintVoiceStatus({config,voice}){
+  defaultVoiceConfig=config;
+  const selected=voiceProfileData.profiles.find(p=>p.id===$('voice-profile').value&&!p.deletedAt);
+  if(selected){config={...config,...selected.settings};voice={...selected.status,busy:voice.busy};}
   const mimo=config.voiceProvider==='mimo';
-  $('tts-label').textContent=mimo?(config.mimoTtsMode==='clone'?'MiMo 参考音色':'MiMo 预置音色'):'Windows 中文语音';
-  $('tts-status').textContent=voice.ttsReady?(mimo?'已配置 · 请生成语音验证':'组件已就绪'):(mimo?'密钥或参考录音未配置':'组件未找到');
+  $('tts-label').textContent=mimo?(config.mimoTtsMode==='clone'?'MiMo 音色克隆':config.mimoTtsMode==='design'?'MiMo 音色设计':'MiMo 预置音色'):'Windows 中文语音';
+  $('tts-status').textContent=voice.ttsReady?(mimo?'已配置 · 请生成语音验证':'组件已就绪'):(mimo?'密钥、音色描述或参考录音未就绪':'组件未找到');
   $('asr-status').textContent=voice.asrReady?(mimo?'已配置 · 请识别音频验证':'本地模型已就绪'):(mimo?'密钥未配置':'模型或环境未找到');
   $('model-label').textContent=mimo?'MiMo v2.5 ASR':'Whisper '+config.model;
   $('processing-label').textContent=mimo?'MiMo 云端处理':'全部留在本机';
@@ -141,7 +192,7 @@ function encodeAudio(buffer){
 }
 $('voiceProvider').onchange=voiceOptions;$('mimoTtsMode').onchange=voiceOptions;
 $('mimoReferenceId').onchange=()=>{referencePreview();$('reference-delete').disabled=!$('mimoReferenceId').value;};
-$('voice-config-form').addEventListener('input',()=>{$('voice-saved-state').textContent='有未保存修改；QQ 仍使用上次保存的配置。';});
+$('voice-config-form').addEventListener('input',()=>{voiceFormDirty=true;$('voice-saved-state').textContent='有未保存修改；试听和 QQ 仍使用已保存的配置。';});
 $('config-form').addEventListener('input',()=>{$('config-saved-state').textContent='有未保存修改，请保存连接配置。';});
 $('reference-delete').onclick=()=>action($('reference-delete'),async()=>{
   const id=$('mimoReferenceId').value;if(!id)throw Error('请先选择录音');
@@ -157,7 +208,7 @@ $('reference-restore').onclick=()=>action($('reference-restore'),async()=>{
 $('voice-config-form').addEventListener('submit',event=>{
   event.preventDefault();action(event.submitter,async()=>{
     const result=await request('/api/voice/config',Object.fromEntries(voiceFields.map(field=>[field,$(field).value])));
-    await fillVoice(result.config);notice('语音配置已保存。可在下方生成语音或上传音频验证。');
+    await fillVoice(result.config);notice('全局默认语音配置与密钥已保存；人设的独立语音副本保持不变。');
   });
 });
 $('mimo-clear').onclick=()=>action($('mimo-clear'),async()=>{
@@ -179,7 +230,7 @@ function notice(text,error=false){$('notice').textContent=text;$('notice').class
 async function request(url,body){const response=await fetch(url,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-QQ-RSI':'panel'},body:JSON.stringify(body)});const result=await response.json();if(!response.ok)throw Error(result.error||'请求失败');return result;}
 function fill(config,selected=fields){for(const field of selected){if(field.endsWith('Token')){$(field).value='';continue;}if(switches.includes(field)){$(field).checked=config[field];continue;}$(field).value=Array.isArray(config[field])?config[field].join('\n'):config[field];}$('dsh-key-state').textContent=config.dshTokenConfigured?'已保存':'未配置';$('qq-key-state').textContent=config.qqTokenConfigured?'已保存':'未配置';}
 async function refresh(){const status=await request('/api/status');if(!initialized){fill(status.config);await fillVoice(status.config);initialized=true;}$('service-status').textContent='● 独立服务已运行';paintVoiceStatus(status);$('bridge-status').textContent=status.bridge.state==='running'?'QQ '+(status.bridge.account||'')+' 已连接':status.bridge.state==='connecting'?'正在连接 QQ':'QQ 连接已停止';$('bridge-detail').textContent=status.bridge.lastError||`待处理消息：${status.bridge.active} · 启动后接收名单内已启用的消息`;$('start').disabled=status.bridge.state!=='stopped';$('stop').disabled=status.bridge.state==='stopped';paintLife(status);return status;}
-async function action(button,work){button.disabled=true;notice('正在处理，请稍候…');try{await work();if($('notice').textContent==='正在处理，请稍候…')notice('操作已完成。');}catch(error){notice(error.message,true);}finally{button.disabled=false;if(button.id==='reference-delete')button.disabled=!$('mimoReferenceId').value;if(button.id==='reference-restore')button.disabled=$('reference-deleted').options.length<=1;await refresh().catch(()=>{});}}
+async function action(button,work){button.disabled=true;notice('正在处理，请稍候…');try{await work();if($('notice').textContent==='正在处理，请稍候…')notice('操作已完成。');}catch(error){notice(error.message,true);}finally{button.disabled=false;if(button.id.startsWith('voice-profile-'))updateProfileButtons();if(button.id==='reference-delete')button.disabled=!$('mimoReferenceId').value;if(button.id==='reference-restore')button.disabled=$('reference-deleted').options.length<=1;await refresh().catch(()=>{});}}
 const pages={
   voice:['语音与通话','选择语音服务、配置音色并试听；实时通话后续接入。'],
   connections:['连接与配置','管理 DSH、QQ 消息入口与桌面 QQ 连接。'],
@@ -204,8 +255,8 @@ for(const formId of ['config-form'])$(formId).addEventListener('submit',event=>{
   for(const field of selected)data[field]=switches.includes(field)?$(field).checked:numbers.includes(field)?Number($(field).value):field==='qqMediaRoots'?$(field).value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean):['privateUsers','groups','adminUsers'].includes(field)?$(field).value.split(/[\s,，]+/).filter(Boolean):$(field).value;
   action(event.submitter,async()=>{const result=await request('/api/config',data);fill(result.config,selected);$('config-saved-state').textContent='连接配置已保存。'+(result.napcatSync?.message??'');notice($('config-saved-state').textContent,result.napcatSync?.state==='pending');});
 });
-$('synthesize').addEventListener('click',()=>action($('synthesize'),async()=>{const result=await request('/api/voice/synthesize',{text:$('speech-text').value});generatedUrl=result.audioUrl;$('audio-player').src=generatedUrl;$('audio-result').hidden=false;notice('语音已生成，可以试听或继续识别。');}));
-async function recognize(buffer){$('voice-progress').textContent='正在使用已保存的服务识别，请稍候…';try{const bytes=new Uint8Array(buffer);let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));const result=await request('/api/voice/transcribe',{audio:btoa(binary)});$('transcript').value=result.text;notice(`识别完成 · ${result.model} 模型 · ${Number.isFinite(result.duration)?result.duration.toFixed(1)+' 秒音频':'识别完成'}`);}finally{$('voice-progress').textContent='使用已保存的语音服务';}}
+$('synthesize').addEventListener('click',()=>action($('synthesize'),async()=>{const result=await request('/api/voice/synthesize',{text:$('speech-text').value,profileId:$('voice-profile').value});generatedUrl=result.audioUrl;$('audio-player').src=generatedUrl;$('audio-result').hidden=false;notice('语音已生成，可以试听或继续识别。');}));
+async function recognize(buffer){$('voice-progress').textContent='正在使用已保存的服务识别，请稍候…';try{const bytes=new Uint8Array(buffer);let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));const result=await request('/api/voice/transcribe',{audio:btoa(binary),profileId:$('voice-profile').value});$('transcript').value=result.text;notice(`识别完成 · ${result.model} 模型 · ${Number.isFinite(result.duration)?result.duration.toFixed(1)+' 秒音频':'识别完成'}`);}finally{$('voice-progress').textContent='使用已保存的语音服务';}}
 $('transcribe').addEventListener('click',()=>action($('transcribe'),async()=>{const file=$('audio-file').files[0];if(!file)throw Error('请先选择音频');if(file.size>8*1024*1024)throw Error('文件不能超过 8 MiB');await recognize(await file.arrayBuffer());}));
 $('recognize-generated').addEventListener('click',()=>action($('recognize-generated'),async()=>{const response=await fetch(generatedUrl);if(!response.ok)throw Error('生成的音频已过期，请重新生成');await recognize(await response.arrayBuffer());}));
 $('probe').addEventListener('click',()=>action($('probe'),async()=>{const result=await request('/api/dsh/probe',{});$('presets').hidden=false;$('presets').textContent=JSON.stringify(result.presets,null,2);notice('DSH 连接成功，下方显示可用预设。');}));
@@ -226,18 +277,21 @@ function pageSelect(){const page=managementData.detail.pages.find(p=>p.name===$(
 function memoryDirty(){
   if(!managementData||!loadedKey)return false;
   const page=managementData.detail.pages.find(p=>p.name===$('page-path').value);
-  return $('persona-text').value!==managementData.detail.persona||$('page-text').value!==(page?.text??'')||(!page&&!!$('page-path').value);
+  return $('persona-text').value!==managementData.detail.persona||$('page-text').value!==(page?.text??'')||(!page&&!!$('page-path').value)||$('persona-voice-profile').value!==(managementData.personaVoice?.saved?'__saved__':'');
 }
 function managedInput(){if(!loadedKey||loadedKey!==$('manage-key').value)throw Error('请先加载选中聊天的资料');return {key:loadedKey};}
 function paintManaged(data){
  if(data.detail.key!==loadedKey||$('manage-key').value!==loadedKey)return;
  const prior=managementData?.detail;
  const draft=prior?.key===loadedKey?{
+   voice:$('persona-voice-profile').value!==(managementData.personaVoice?.saved?'__saved__':'')?$('persona-voice-profile').value:null,
    persona:$('persona-text').value!==prior.persona?$('persona-text').value:null,
    path:$('page-path').value,text:$('page-text').value,
    pageDirty:$('page-text').value!==(prior.pages.find(p=>p.name===$('page-path').value)?.text??'')||(!prior.pages.some(p=>p.name===$('page-path').value)&&!!$('page-path').value),
  }:null;
  managementData=data;$('manage-content').hidden=false;$('new-conversation').disabled=false;
+ paintPersonaVoice(data.personaVoice);
+ if(draft?.voice!==null&&draft?.voice!==undefined){$('persona-voice-profile').value=draft.voice;$('persona-voice-state').textContent+=' 另有未保存的语音选择。';}
  $('memory-reset').disabled=false;
  $('memory-kind').value=loadedKey.split('/')[1];populateMemoryNumbers();$('memory-id').value=loadedKey;
  $('slang-card').hidden=!loadedKey.includes('/group/');
@@ -273,6 +327,7 @@ function paintManaged(data){
 }
 function chatLabel(key){const [,kind,id]=key.split('/');return (kind==='group'?'群聊 ':'好友 ')+id;}
 async function loadManagedKeys(){
+ await loadVoiceProfiles();
  const old=$('manage-key').value,data=await request('/api/manage');currentBot=data.currentBot;
  storedKeys=data.storedKeys;
  const keys=data.keys.filter(key=>$('memory-history').checked||data.connectedKeys.includes(key));managedKeys=keys;
@@ -284,6 +339,29 @@ async function loadManagedKeys(){
  populateMemoryNumbers();
  $('manage-empty').textContent=keys.length?'选择即加载；切换不会覆盖、复制或合并任何记忆。':'没有已接入聊天。请在 QQ 控制中加入接收名单，或勾选查看历史资料。';
 }
+function paintPersonaVoice(selection){
+ const saved=selection?.saved,select=$('persona-voice-profile');
+ select.replaceChildren(new Option('沿用全局默认',''));
+ if(saved)select.append(new Option('当前独立配置：'+saved.name,'__saved__'));
+ for(const p of voiceProfileData.profiles.filter(p=>!p.deletedAt))select.append(new Option(p.name,p.id));
+ select.value=saved?'__saved__':'';
+ const settings=saved?.settings;
+ $('persona-voice-state').textContent=saved?'已独立保存：'+saved.name+' · '+(settings.voiceProvider==='local'?'本地语音':settings.mimoTtsMode==='design'?'MiMo 音色设计':settings.mimoTtsMode==='clone'?'MiMo 音色克隆':'MiMo 预置音色')+(settings.mimoTtsMode==='design'?' · '+settings.mimoDesign:''):'当前沿用全局默认语音配置。';
+}
+$('persona-voice-profile').onchange=()=>{$('persona-voice-state').textContent='语音选择尚未保存；仅影响当前聊天人设。';};
+$('persona-voice-library').onclick=()=>document.querySelector('[data-tab="voice"]').click();
+$('persona-voice-save').onclick=()=>action($('persona-voice-save'),async()=>{
+ const input=managedInput(),profileId=$('persona-voice-profile').value;
+ if(profileId==='__saved__'){notice('当前独立配置已经保存。若要采用公共预设的新版本，请重新选择该预设。');return;}
+ manageBusy=true;
+ try{
+  const data=await request('/api/manage/voice',{...input,profileId,revision:managementData.personaVoice.revision});
+  if(loadedKey!==input.key)return;
+  // Mark only this choice as acknowledged; preserve unrelated persona/page drafts.
+  managementData.personaVoice=data.personaVoice;paintPersonaVoice(data.personaVoice);paintManaged(data);
+  notice(profileId?'此人设的语音副本已保存，下次处理消息生效。':'已清除独立语音选择，沿用全局默认。');
+ }finally{manageBusy=false;}
+});
 function populateMemoryNumbers(){
  const old=$('memory-id').value,kind=$('memory-kind').value;
  $('memory-id').replaceChildren(new Option('请选择好友或群',''));
@@ -322,7 +400,7 @@ async function resetMemory(account){
  if(manageBusy)throw Error('请等待当前保存完成');
  const scope=account?'account':managedInput().key;
  const target=account?'当前机器人 '+currentBot+' 下的全部聊天（包括未接入的历史资料）':chatLabel(scope);
- if(!await confirmAction('确认重置 '+target+' 的全部记忆？包括人设、长期记忆、表情笔记、黑话及当前会话上下文。未保存草稿将丢弃。旧资料保存在本机备份中；其他机器人账号、QQ 聊天记录和语音配置不受影响。'))return;
+ if(!await confirmAction('确认重置 '+target+' 的全部记忆？包括人设及其语音选择、长期记忆、表情笔记、黑话及当前会话上下文。未保存草稿将丢弃。旧资料保存在本机备份中；其他机器人账号、QQ 聊天记录和语音配置不受影响。'))return;
  const result=await request('/api/manage/reset',{scope,confirm:'RESET '+(account?currentBot:scope)});
  loadedKey='';managementData=null;++manageSerial;$('manage-content').hidden=true;
  await loadManagedKeys();if(!account){$('manage-key').value=scope;await reloadManaged();}

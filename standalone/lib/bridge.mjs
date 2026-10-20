@@ -16,6 +16,7 @@ import {Management} from './management.mjs';
 import {ChatTools,TOOL_GUIDE} from './chat-tools.mjs';
 import {ReminderRelay} from './reminders.mjs';
 import {resolveChatConfig} from './chat-policy.mjs';
+import {VoiceProfiles} from './voice-profiles.mjs';
 
 export function routeMessage(event, config) {
   if(config.botQQ&&String(event.self_id)!==config.botQQ)return null;
@@ -39,6 +40,7 @@ export function routeMessage(event, config) {
 export class Bridge {
   constructor(runtime, { Dsh = DshClient, now = Date.now, voice, media, proactive } = {}) {
     this.runtime = runtime; this.Dsh = Dsh;
+    this.voiceProfiles=new VoiceProfiles(runtime);
     this.file = path.join(runtime, 'bridge.private.json');
     this.state = readJson(this.file, { sessions: {}, seen: [], deliveries: [] });
     this.status = { state: 'stopped', active: 0, lastError: '' };
@@ -64,7 +66,7 @@ export class Bridge {
     }
   }
   memory(key){if(!this.memories.has(key))this.memories.set(key,new MemoryStore(this.runtime,key));return this.memories.get(key);}
-  configFor(route){const config=resolveChatConfig(this.config,route);return {...config,memoryContextActive:!config.memoryActiveOnly||this.state.lastActiveKey===route.key};}
+  configFor(route){const config=this.voiceProfiles.resolve(resolveChatConfig(this.config,route),route.key);return {...config,memoryContextActive:!config.memoryActiveOnly||this.state.lastActiveKey===route.key};}
   scope(route){const config=this.configFor(route),preset=route.group?config.groupPreset:config.privatePreset;return createHash('sha256').update(config.dshUrl+'|'+preset+'|'+route.key+(this.state.memoryEpochs?.[route.key]?'|'+this.state.memoryEpochs[route.key]:'')).digest('hex');}
   reportError(message){this.status.lastError=message;this.systemLog?.record('bridge.error',{component:'qq',level:'error'});}
   summary(){return Object.values(this.state.sessions).filter(s=>s.route).map(s=>({key:s.route.key,sessionId:s.id,blocked:s.blocked,
@@ -289,7 +291,7 @@ export class Bridge {
     let reply;
     try{
       if(name==='help')reply='/help 帮助 · /status 状态 · /id 标识 · /ver 版本 · /stop 停止并丢弃待处理消息 · /new 新会话 · /steer 内容 插话 · /session 历史列表 · /workspace 当前工作区 · /preset 当前预设 · /memory 记忆概览 · /doctor 本聊天检查。模型、权限和预设切换请在本机 DSH 配置。';
-      else if(name==='ver')reply='QQ 独立服务 0.9.0';
+      else if(name==='ver')reply='QQ 独立服务 0.10.0';
       else if(name==='stop'){
         this.epochs.set(route.key,(this.epochs.get(route.key)??0)+1);
         const ambient=this.ambient.get(route.key);if(ambient){clearTimeout(ambient.timer);this.ambient.delete(route.key);}

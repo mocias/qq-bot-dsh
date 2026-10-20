@@ -31,7 +31,7 @@ export function resetMemories(runtime,bridge,keys){
   if(bridge.status.state!=='stopped'||bridge.status.active||bridge.jobs.size||bridge.queues.size||bridge.maintenance.size)throw Error('请先停止 QQ 接收并等待全部任务结束');
   if(!keys.length||keys.some(key=>!/^\d{5,20}\/(?:private|group)\/\d{5,20}$/.test(key)))throw Error('请选择要重置的聊天');
   const id=randomUUID(),base='memory-reset-backups/'+id,selected=new Set(keys),before=structuredClone(bridge.state),moves=[];
-  for(const key of keys)for(const relative of ['memories/'+scopeOf(key),'knowledge/'+scopeOf(key)+'.json']){
+  for(const key of keys)for(const relative of ['memories/'+scopeOf(key),'knowledge/'+scopeOf(key)+'.json','chat-inbox/'+scopeOf(key)+'.json']){
     const source=location(runtime,relative);if(fs.existsSync(source))moves.push({source:relative,backup:base+'/'+relative});
   }
   for(const move of moves)location(runtime,move.backup);

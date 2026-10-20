@@ -56,6 +56,25 @@ function paintPolicy(data){
   const updateQuiet=()=>{for(const key of ['voiceQuietStart','voiceQuietEnd'])$('policy-'+key).closest('.policy-row').hidden=$('policy-voiceQuietMode').value!=='scheduled';};
   $('policy-voiceQuietMode').addEventListener('change',updateQuiet);
   $('override-voiceQuietMode')?.addEventListener('change',updateQuiet);updateQuiet();
+  if(specific){
+    const card=element('article');card.className='card';
+    card.append(element('h2','消息与参与状态'),element('p','仅本聊天。未读是机器人本地处理进度，不是 QQ 客户端的已读回执；最多保留最近 500 条。'));
+    const state=element('p','正在读取未读和潜水状态……'),preview=element('pre'),actions=element('div');
+    actions.className='actions';preview.className='chat-inbox-preview';state.setAttribute('role','status');
+    const key=data.scope;
+    const refresh=async()=>{
+      const value=await request('/api/chat-state?key='+encodeURIComponent(key));
+      state.textContent=`未读 ${value.unreadCount} 条；${value.sleeping?'潜水至 '+new Date(value.wake.until).toLocaleString():'活跃'}。`+(value.truncatedBeforeSeq?'更早记录已超出保留上限。':'');
+      preview.textContent=value.messages.map(m=>`#${m.seq} · ${m.sender}：${m.text}${m.textTruncated?'（摘要）':''}`).join('\n');
+    };
+    for(const [label,mode]of [['刷新状态',null],['潜水 30 分钟','diving'],['立即唤醒','active']]){
+      const button=element('button',label);button.type='button';button.className='secondary';
+      button.onclick=async()=>{button.disabled=true;try{if(mode)await request('/api/chat-wake',{key,mode,minutes:30});await refresh();}catch(error){state.textContent=error.message;}finally{button.disabled=false;}};
+      actions.append(button);
+    }
+    card.append(actions,state,preview);container.append(card);
+    refresh().catch(error=>{state.textContent=error.message;});
+  }
 }
 async function loadPolicy(scope,force=false){
   const serial=++policyLoad;$('policy-save').disabled=true;$('policy-reset').disabled=true;

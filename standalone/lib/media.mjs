@@ -171,7 +171,7 @@ export class Media {
   }
   async outgoing(parsed,route,session,config){
     const q=parsed.qq??{};
-    if(!q||typeof q!=='object'||Array.isArray(q)||Object.keys(q).some(k=>!['images','voice','forward','file','video','replyTo'].includes(k)))throw Error('QQ 输出格式无效');
+    if(!q||typeof q!=='object'||Array.isArray(q)||Object.keys(q).some(k=>!['images','voice','forward','file','video','replyTo','at'].includes(k)))throw Error('QQ 输出格式无效');
     if(('images'in q&&!Array.isArray(q.images))||('forward'in q&&!Array.isArray(q.forward))||('voice'in q&&typeof q.voice!=='string'))throw Error('QQ 输出格式无效');
     const kinds=[Array.isArray(q.images)&&q.images.length>0,typeof q.voice==='string'&&!!q.voice,Array.isArray(q.forward)&&q.forward.length>0,!!q.file,!!q.video].filter(Boolean).length;
     if(kinds>1)throw Error('一次回复只能选择一种多媒体形式');
@@ -222,7 +222,14 @@ export class Media {
       for(let offset=0;offset<chars.length;offset+=4000)text.push({type:'text',data:{text:chars.slice(offset,offset+4000).join('')}});
       segments.unshift(...text);
     }
-    if(q.replyTo&&segments.length){await this.reference(route,q.replyTo);segments.unshift({type:'reply',data:{id:String(q.replyTo)}});}
+    if(q.at!=null){
+      if(!route.group||!config.mentionSend||!/^\d{5,20}$/.test(String(q.at)))throw Error('此聊天不允许 @ 或成员号码无效');
+      const member=await this.call('get_group_member_info',{group_id:route.id,user_id:String(q.at),no_cache:false});
+      if(String(member?.user_id)!==String(q.at)||member?.group_id!=null&&String(member.group_id)!==route.id)throw Error('无法确认 @ 的成员');
+      if(segments.length)segments.unshift({type:'at',data:{qq:String(q.at)}});
+    }
+    const replyTo=config.quoteMode==='never'?null:(q.replyTo??(config.quoteMode==='always'?route.qqMessageId:null));
+    if(replyTo&&segments.length){await this.reference(route,replyTo);segments.unshift({type:'reply',data:{id:String(replyTo)}});}
     return segments.length?{action:route.group?'send_group_msg':'send_private_msg',params:{[route.group?'group_id':'user_id']:route.id,message:segments}}:null;
   }
 }

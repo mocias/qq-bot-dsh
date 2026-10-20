@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto';
 import {validateChatPolicy} from './chat-policy.mjs';
 
 export const defaults = {
+  messageToolsEnabled:true,quoteMode:'auto',mentionSend:false,pokeReceive:false,pokeSend:false,
+  wakeEnabled:false,wakeKeywords:'',wakeSpeakers:[],
   chatPolicy: {private:{},group:{},overrides:{}},
   dshUrl: 'http://127.0.0.1:3080', dshToken: '', dshLocalAuth: false,
   qqUrl: 'ws://127.0.0.1:3001', qqToken: '', botQQ: '',
@@ -40,10 +42,10 @@ export function validate(input, previous = defaults) {
     if(field==='qqMediaRoots'){
       if(!Array.isArray(value)||value.length>10||value.some(x=>typeof x!=='string'||x.length>1000||!(/^[a-z]:[\\/]/i.test(x)||x.startsWith('/'))||x.startsWith('//')||x.startsWith('\\\\')))throw Error('QQ 媒体目录必须是本机绝对路径');
       out[field]=[...new Set(value)];
-    } else if (field === 'privateUsers' || field === 'groups' || field === 'adminUsers') {
+    } else if (field === 'privateUsers' || field === 'groups' || field === 'adminUsers' || field === 'wakeSpeakers') {
       if (!Array.isArray(value) || value.length > 100 || value.some(x => typeof x !== 'string' || !/^\d{5,20}$/.test(x))) throw Error('QQ 号码请使用数字，每行一个');
       out[field] = [...new Set(value)];
-    } else if (['memoryAutoInject','memoryRegisterSkill','memoryActiveOnly','qqFiles','groupAmbientEnabled','groupToolsEnabled','knowledgeEnabled','remindersEnabled','memoryEnabled','rotationEnabled','dshLocalAuth','qqImages','qqForward','qqVoiceReceive','qqVoiceSend','recallEnabled','groupProactiveEnabled'].includes(field)) {
+    } else if (['messageToolsEnabled','mentionSend','pokeReceive','pokeSend','wakeEnabled','memoryAutoInject','memoryRegisterSkill','memoryActiveOnly','qqFiles','groupAmbientEnabled','groupToolsEnabled','knowledgeEnabled','remindersEnabled','memoryEnabled','rotationEnabled','dshLocalAuth','qqImages','qqForward','qqVoiceReceive','qqVoiceSend','recallEnabled','groupProactiveEnabled'].includes(field)) {
       if(typeof value!=='boolean') throw Error('开关格式不正确'); out[field]=value;
     } else if (['memoryBootMaxChars','memoryPageMaxChars','proactiveMaxPerSession'].includes(field)) {
       const budget=field!=='proactiveMaxPerSession';
@@ -62,6 +64,8 @@ export function validate(input, previous = defaults) {
   if (input.clearDshToken === true) out.dshToken = '';
   if (input.clearQqToken === true) out.qqToken = '';
   if (input.clearMimoApiKey === true) out.mimoApiKey = '';
+  if(!['auto','never','always'].includes(out.quoteMode))throw Error('引用模式无效');
+  if(out.wakeKeywords.length>500)throw Error('唤醒关键词过长');
   if(!['local','mimo'].includes(out.voiceProvider))throw Error('请选择本地模式或 MiMo API');
   if(!['preset','design','clone'].includes(out.mimoTtsMode))throw Error('请选择预置音色、音色设计或音色克隆');
   if(!['mimo_default','冰糖','茉莉','苏打','白桦','Mia','Chloe','Milo','Dean'].includes(out.mimoVoice))throw Error('请选择支持的 MiMo 音色');

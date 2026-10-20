@@ -110,6 +110,12 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         const scope=url.searchParams.get('scope')??'private';checkPolicyScope(scope);
         json(res,200,policyPayload(scope));return;
       }
+      if(req.method==='GET'&&url.pathname==='/api/chat-state'){
+        const key=url.searchParams.get('key');checkPolicyScope(key);
+        if(!key.includes('/'))throw Error('请选择具体好友或群');
+        const inbox=bridge.inbox(key);
+        json(res,200,{key,wake:inbox.read().wake,sleeping:inbox.sleeping(),...inbox.list({unread:true,limit:20})});return;
+      }
       if(req.method==='GET'&&url.pathname==='/api/voice/references'){json(res,200,{references:voice.listReferences(),deleted:voice.listReferences({deleted:true})});return;}
       if(req.method==='GET'&&url.pathname==='/api/voice/profiles'){json(res,200,profilePayload());return;}
       if(req.method==='GET'&&url.pathname.startsWith('/api/voice/reference/')){
@@ -198,6 +204,12 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
           await bridge.call('add_custom_face',{file:'base64://'+bytes.toString('base64')});
         }else throw Error('未知管理操作');
         json(res,200,managed(input.key));
+      }else if(url.pathname==='/api/chat-wake'){
+        checkPolicyScope(input.key);if(!input.key.includes('/'))throw Error('请选择具体好友或群');
+        checkKey(input.key,true);
+        if(bridge.outbox?.has(input.key)||bridge.ambient?.has(input.key))throw Error('此聊天仍有待处理消息，请稍后操作');
+        if(!policyView(config,input.key).effective.wakeEnabled)throw Error('请先保存启用潜水与唤醒');
+        json(res,200,bridge.inbox(input.key).setWake(input.mode,input.minutes));
       }else if(url.pathname==='/api/chat-policy'){
         idleConfig();checkPolicyScope(input.scope);
         if(input.revision!==policyRevision(config))throw Error('聊天设置已变化，请重新加载后保存');

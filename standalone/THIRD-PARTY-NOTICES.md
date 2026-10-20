@@ -39,3 +39,7 @@ Version 0.4 imports the original `dsh-plugin-memory-source/lib/recall-policy.js`
 # Version 0.5
 
 QQ CQ parsing and face labels import the preserved dsh-onebot-source/lib/cq.js (license in dsh-onebot-source/LICENSE). Group tools import the existing group security, image and public-search validation modules. Per-chat sticker notes and candidate/confirmed/rejected slang workflows were informed by qq-bridge src/bridge.js and src/mcp-snowluma-safe.js at the commit above; they are newly implemented host adapters, not a bundled SnowLuma runtime. DSH schedule source handling was checked against packages/schedule/schedule/src/runtime.ts.
+
+# Version 0.12
+
+The current public qq-bridge main sources (src/mcp-snowluma-safe.js, src/bridge.js and config.example.json, read 2026-10-20) were used to adapt message-query, unread-cursor, quote, mention, queued-send, poke and wake behavior to this host. The upstream MIT copyright and permission notice above continue to apply to adapted material. The host keeps its own scoped storage, dispatch scheduler, OneBot transport and final-turn delivery semantics; no SnowLuma source, SDK or second bridge runtime is bundled. See docs/QQ-CHAT-0.12.md for deliberate differences.

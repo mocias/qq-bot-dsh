@@ -16,6 +16,7 @@ import {publicDownload} from './lib/media.mjs';
 import {sniffImageMediaType} from '../dsh-group-social/lib/images.mjs';
 import {publicSearch} from './lib/chat-tools.mjs';
 import { DesktopQQ } from './lib/desktop-qq.mjs';
+import {policyView,policyRevision,resolveChatConfig} from './lib/chat-policy.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export function createApp({ root = path.dirname(here), runtime = path.join(here,'.runtime'), voice: injectedVoice, bridge: injectedBridge } = {}) {
@@ -33,7 +34,13 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
     if(!keys().includes(key))throw Error('请选择已配置或已有记忆的聊天');
     if(writing&&(bridge.jobs?.has(key)||bridge.queues?.has(key)||bridge.maintenance?.has(key)))throw Error('该聊天正在处理消息，请稍后编辑');
   }
-  function managed(key){checkKey(key);return {detail:management.inspect(key),knowledge:new Knowledge(runtime,key).read()};}
+  function managed(key){checkKey(key);return {detail:management.inspect(key),knowledge:new Knowledge(runtime,key).read(),policy:policyView(config,key).effective,lifecycle:(bridge.summary?.()??[]).filter(s=>s.key===key)};}
+  function policyScopes(){
+    return ['private','group',...(config.botQQ?[
+      ...config.privateUsers.map(id=>config.botQQ+'/private/'+id),
+      ...config.groups.map(id=>config.botQQ+'/group/'+id)]:[])];
+  }
+  function checkPolicyScope(scope){if(!policyScopes().includes(scope))throw Error('请先在连接页配置机器人账号和允许的好友或群');}
   function idleConfig(){
     if(bridge.status.state!=='stopped'||bridge.status.active||voice.busy)throw Error('请先停止 QQ 连接并等待语音及消息任务完成，再修改配置');
   }
@@ -70,6 +77,10 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         const [type,file]=assets.get(url.pathname); res.writeHead(200,{'Content-Type':type}); res.end(fs.readFileSync(path.join(here,'public',file))); return;
       }
       if (req.method==='GET' && url.pathname==='/api/status') { json(res,200,{config:publicConfig(config),voice:voice.status(config),bridge:bridge.status,lifecycle:bridge.summary?.()??[],imports:importedStores(runtime)}); return; }
+      if(req.method==='GET'&&url.pathname==='/api/chat-policy'){
+        const scope=url.searchParams.get('scope')??'private';checkPolicyScope(scope);
+        json(res,200,{scopes:policyScopes(),...policyView(config,scope)});return;
+      }
       if(req.method==='GET'&&url.pathname==='/api/voice/references'){json(res,200,{references:voice.listReferences()});return;}
       if(req.method==='GET'&&url.pathname.startsWith('/api/voice/reference/')){
         const {meta,bytes}=voice.reference(url.pathname.slice('/api/voice/reference/'.length));
@@ -111,11 +122,23 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
           if(bridge.config?.botQQ!==input.key.split('/')[0]&&bridge.status.account!==input.key.split('/')[0])throw Error('当前登录账号与知识库不匹配');
           const result=await bridge.call('fetch_custom_face_detail',{count:100});checkKey(input.key,true);knowledge.addFavorites(Array.isArray(result)?result:result?.emojiInfoList);
         }else if(url.pathname==='/api/manage/collect'){
+          if(!policyScopes().includes(input.key)||!resolveChatConfig(config,input.key).stickerCollect)throw Error('请先为此聊天开启“收藏到 QQ”功能');
           if(bridge.config?.botQQ!==input.key.split('/')[0]&&bridge.status.account!==input.key.split('/')[0])throw Error('当前登录账号与知识库不匹配');
           const item=knowledge.sticker(input.id),bytes=await publicDownload(item.url);if(!sniffImageMediaType(bytes))throw Error('表情格式不支持');
           await bridge.call('add_custom_face',{file:'base64://'+bytes.toString('base64')});
         }else throw Error('未知管理操作');
         json(res,200,managed(input.key));
+      }else if(url.pathname==='/api/chat-policy'){
+        idleConfig();checkPolicyScope(input.scope);
+        if(input.revision!==policyRevision(config))throw Error('聊天设置已变化，请重新加载后保存');
+        const policy=structuredClone(config.chatPolicy);
+        if(input.scope==='private'||input.scope==='group')policy[input.scope]=input.reset?{}:input.patch;
+        else if(input.reset)delete policy.overrides[input.scope];
+        else policy.overrides[input.scope]=input.patch;
+        if(!input.reset&&(!input.patch||typeof input.patch!=='object'))throw Error('缺少聊天设置');
+        const next=validate({chatPolicy:policy},config);
+        writeJson(configFile,next);config=next;
+        json(res,200,{scopes:policyScopes(),...policyView(config,input.scope)});
       }else if (url.pathname==='/api/config'||url.pathname==='/api/voice/config') {
         idleConfig();
         const voiceFields=['voice','model','voiceProvider','mimoApiKey','mimoTtsMode','mimoVoice','mimoReferenceId','mimoStyle','mimoAsrLanguage','clearMimoApiKey'];

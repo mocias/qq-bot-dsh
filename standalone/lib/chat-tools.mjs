@@ -25,6 +25,10 @@ export class ChatTools {
     if(typeof tool!=='string')throw Error('工具名无效');
     if(tool.startsWith('qq_group_')&&!this.config.groupToolsEnabled)throw Error('群聊专用工具未启用');
     if(!tool.startsWith('qq_group_')&&!this.config.knowledgeEnabled)throw Error('知识库未启用');
+    if(tool.startsWith('qq_slang_')&&!(this.config.slangLearn??this.config.knowledgeEnabled))throw Error('此聊天未开启黑话学习');
+    if(['qq_sticker_note','qq_get_sticker_image'].includes(tool)&&!(this.config.stickerLearn??this.config.knowledgeEnabled))throw Error('此聊天未开启表情学习');
+    if(tool==='qq_send_sticker'&&(!(this.config.stickerSend??this.config.knowledgeEnabled)||!(this.config.qqImageSend??this.config.qqImages)))throw Error('此聊天未开启表情发送或图片发送');
+    if(tool==='qq_group_send_image'&&!(this.config.qqImageSend??this.config.qqImages))throw Error('此聊天未开启图片发送');
     if(tool==='qq_group_memory'&&!this.config.memoryEnabled)throw Error('记忆未启用');
     if(tool.startsWith('qq_group_')&&!this.route.group)throw Error('此工具仅用于群聊');
     if(tool==='qq_group_web_search'){if(this.searches++>=1)throw Error('本轮搜索次数已用完');return this.search(args.query);}

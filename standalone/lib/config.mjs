@@ -1,8 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import {validateChatPolicy} from './chat-policy.mjs';
 
 export const defaults = {
+  chatPolicy: {private:{},group:{},overrides:{}},
   dshUrl: 'http://127.0.0.1:3080', dshToken: '', dshLocalAuth: false,
   qqUrl: 'ws://127.0.0.1:3001', qqToken: '', botQQ: '',
   adminUsers: [], qqFiles: false, groupAmbientEnabled: false, groupAmbientDelaySeconds: 10, groupAmbientMinMinutes: 5, groupToolsEnabled: false, knowledgeEnabled: false, remindersEnabled: false,
@@ -31,6 +33,7 @@ export function localUrl(value, schemes) {
 export function validate(input, previous = defaults) {
   const out = { ...defaults, ...previous };
   for (const field of Object.keys(defaults)) {
+    if(field==='chatPolicy')continue;
     if (!(field in input)) continue;
     const value = input[field];
     if(field==='qqMediaRoots'){
@@ -70,6 +73,7 @@ export function validate(input, previous = defaults) {
   for(const f of ['proactiveStart','proactiveEnd'])if(!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(out[f]))throw Error('主动消息时段格式应为 HH:mm');
   if(out.recallMaxMinutes<out.recallMinMinutes||out.groupProactiveMaxMinutes<out.groupProactiveMinMinutes)throw Error('最长间隔不能小于最短间隔');
   for (const field of ['privatePreset', 'groupPreset']) if (out[field].length > 200) throw Error('预设名称过长');
+  out.chatPolicy=validateChatPolicy(input.chatPolicy??out.chatPolicy,out);
   return out;
 }
 export function publicConfig(config) {

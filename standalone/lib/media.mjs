@@ -115,7 +115,7 @@ export class Media {
         }else if(['json','xml'].includes(item.type)){
           add('[分享卡片，仅作资料] '+String(d.data??'').slice(0,2000));
         }else if(item.type==='poke')add('[戳一戳]');
-        else if(['file','video'].includes(item.type)&&config.qqFiles){
+        else if(['file','video'].includes(item.type)&&(config.qqFileReceive??config.qqFiles)){
           try{
             const id=d.file_id??d.file;if(!opaqueFile(id))throw Error('文件 ID 无效');
             const result=await this.call('get_file',{file_id:id,file:id});
@@ -128,7 +128,7 @@ export class Media {
             else add('[二进制附件已保存，未解析其内容]');
           }catch{add('[附件读取失败]');}
         }
-        else if(item.type==='image'&&config.qqImages){
+        else if(item.type==='image'&&(config.qqImageReceive??config.qqImages)){
           if(images.length>=6){add('[图片数量超限]');continue;}
           try{
             let source;
@@ -151,7 +151,7 @@ export class Media {
             const result=await this.voice.transcribeRecord(file,config);
             add('[语音转写] '+result.text);
           }catch{failures.push('record');add('[语音转写失败，请用户重发文字]');}
-        }else if(item.type==='forward'&&config.qqForward){
+        }else if(item.type==='forward'&&(config.qqForwardReceive??config.qqForward)){
           try{const id=String(d.id??'');if(!id||depth>=4)throw Error('转发层级超限');
             const result=await this.call('get_forward_msg',{id,message_id:id});add('[合并转发，以下是引用资料]');
             for(const node of (result?.messages??[]).slice(0,50)){
@@ -176,7 +176,7 @@ export class Media {
     const kinds=[Array.isArray(q.images)&&q.images.length>0,typeof q.voice==='string'&&!!q.voice,Array.isArray(q.forward)&&q.forward.length>0,!!q.file,!!q.video].filter(Boolean).length;
     if(kinds>1)throw Error('一次回复只能选择一种多媒体形式');
     if(q.file||q.video){
-      if(!config.qqFiles)throw Error('文件收发未启用');
+      if(!(config.qqFileSend??config.qqFiles))throw Error('文件收发未启用');
       const source=q.file??q.video;if(typeof source!=='string')throw Error('附件路径无效');
       const file=path.resolve(session.workspace,source);
       const relative=path.relative(session.workspace,file);
@@ -186,7 +186,7 @@ export class Media {
       return {action:route.group?'send_group_msg':'send_private_msg',params:{[route.group?'group_id':'user_id']:route.id,message:[{type:'video',data:{file:'base64://'+bytes.toString('base64')}}]}};
     }
     if(q.forward?.length){
-      if(!config.qqForward||q.forward.length>50)throw Error('合并转发未启用或节点过多');
+      if(!(config.qqForwardSend??config.qqForward)||q.forward.length>50)throw Error('合并转发未启用或节点过多');
       const messages=q.forward.map(n=>{
         if(!n||typeof n.content!=='string'||!n.content.trim())throw Error('转发内容不能为空');
         return {type:'node',data:{uin:route.key.split('/')[0],name:String(n.name||'助手').slice(0,24),content:[{type:'text',data:{text:n.content.slice(0,500)}}]}};
@@ -197,7 +197,7 @@ export class Media {
     const tagged=reply.match(/^\s*\[\[qq_voice\]\]([\s\S]+)\[\[\/qq_voice\]\]\s*$/);
     const voiceText=q.voice??tagged?.[1]??reply;
     const policy={...voiceDefaults,enabled:config.qqVoiceSend,mode:config.voiceReplyMode,quietHours:{start:config.voiceQuietStart,end:config.voiceQuietEnd}};
-    if(!route.group&&(q.voice||tagged||config.voiceReplyMode==='voice')&&!textReason(voiceText,policy,new Date(this.now()))){
+    if((!route.group||config.groupVoiceSend)&&(q.voice||tagged||config.voiceReplyMode==='voice')&&!textReason(voiceText,policy,new Date(this.now()))){
       try{
         const result=await this.voice.synthesize(voiceText,config),data=this.voice.audio(result.id),info=wavInfo(data);
         if(info.duration_seconds>60||data.length>MAX)throw Error('语音过长');
@@ -205,7 +205,7 @@ export class Media {
       }catch{reply=voiceText;} // Only preparation failure falls back. Never retry an uncertain send.
     }else if(q.voice||tagged)reply=voiceText;
     if(q.images?.length){
-      if(!config.qqImages||q.images.length>9)throw Error('图片发送未启用或图片过多');
+      if(!(config.qqImageSend??config.qqImages)||q.images.length>9)throw Error('图片发送未启用或图片过多');
       for(const source of q.images){
         if(typeof source!=='string')throw Error('图片来源格式错误');
         if(!/^https?:\/\//i.test(source)&&inProtectedDir(session.workspace,path.resolve(session.workspace,source)))throw Error('不能发送受保护目录里的图片');

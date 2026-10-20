@@ -9,7 +9,7 @@ import {MessageTools} from '../lib/message-tools.mjs';
 import {Bridge} from '../lib/bridge.mjs';
 import {Media} from '../lib/media.mjs';
 import {defaults,validate,writeJson} from '../lib/config.mjs';
-import {resolveChatConfig} from '../lib/chat-policy.mjs';
+import {resolveChatConfig,fieldsFor} from '../lib/chat-policy.mjs';
 import {resetMemories} from '../lib/reset-memory.mjs';
 import {createApp} from '../server.mjs';
 const key='100000001/group/100000003',other='100000001/private/100000002';
@@ -115,10 +115,11 @@ test('poke notice only accepts current-account target, fresh notices, configured
   bridge.receive({...event,target_id:100000009},0);bridge.receive({...event,time:1},0);bridge.receive({...event,self_id:100000099},0);
   assert.equal(received,0);bridge.receive(event,0);bridge.receive(event,0);assert.equal(received,1);
 });
-test('sleep persists; passive and timed participation stop; direct, keyword, speaker and expiry wake without widening allowlists',t=>{
+test('sleep ignores legacy keywords; direct, speaker and expiry still wake',t=>{
   let now=1000000;const inbox=new ChatInbox(temp(t),key,()=>now),p=new Participation(inbox),config={...defaults,wakeEnabled:true,wakeKeywords:'小助手',wakeSpeakers:['100000004']};
   inbox.setWake('diving',1);assert.equal(p.onInput({...route,ambient:true},config),false);assert.equal(p.allowsBackground(config),false);
-  assert.equal(p.onInput({...route,ambient:true,text:'小助手你好'},config),true);
+  assert.equal(p.onInput({...route,ambient:true,text:'小助手你好'},config),false);
+  assert.equal(inbox.sleeping(),true);
   inbox.setWake('diving',1);assert.equal(p.onInput({...route,ambient:true,sender:'100000004'},config),true);
   inbox.setWake('diving',1);assert.equal(p.onInput({...route,ambient:false},config),true);
   inbox.setWake('diving',1);now+=60001;assert.equal(p.allowsBackground(config),true);
@@ -146,7 +147,10 @@ test('quote policy and mention permission apply to legacy output too',async t=>{
   await assert.rejects(media.outgoing({reply:'hi',qq:{at:route.sender}},route,session,config),/不允许/);
 });
 test('new configuration inherits per scope and memory reset archives chat index/wake state',t=>{
-  const config=validate({chatPolicy:{group:{wakeEnabled:true,pokeSend:true},private:{quoteMode:'never'},overrides:{[key]:{pokeSend:false}}}},conf);
+  const config=validate({chatPolicy:{group:{wakeEnabled:true,pokeSend:true,wakeKeywords:'旧关键词'},private:{quoteMode:'never'},overrides:{[key]:{pokeSend:false,wakeKeywords:'旧覆盖'}}}},conf);
+  assert.equal(Object.hasOwn(fieldsFor('group'),'wakeKeywords'),false);
+  assert.equal(Object.hasOwn(config.chatPolicy.group,'wakeKeywords'),false);
+  assert.equal(Object.hasOwn(config.chatPolicy.overrides[key],'wakeKeywords'),false);
   assert.equal(resolveChatConfig(config,route).pokeSend,false);assert.equal(resolveChatConfig(config,route).wakeEnabled,true);
   assert.equal(resolveChatConfig(config,other).quoteMode,'never');assert.equal(resolveChatConfig(config,other).wakeEnabled,false);
   const runtime=temp(t),bridge=new Bridge(runtime);bridge.inbox(key).append({sourceId:'a',text:'secret'});bridge.inbox(key).setWake('diving');

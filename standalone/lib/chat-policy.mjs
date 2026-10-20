@@ -9,7 +9,6 @@ export const policyFields={
   pokeReceive:bool('被拍一拍时允许回应','消息功能'),
   pokeSend:bool('允许发送拍一拍','消息功能'),
   wakeEnabled:{...bool('启用潜水与唤醒','潜水与唤醒'),help:'潜水期间暂停被动接话和定时搭话；直接私聊、@、引用机器人及已启用的拍一拍仍可唤醒。到期只恢复原调度。'},
-  wakeKeywords:{type:'string',label:'潜水唤醒关键词（逗号分隔）',section:'潜水与唤醒',max:500},
   wakeSpeakers:{type:'ids',label:'潜水唤醒群成员（每行一个 QQ）',section:'潜水与唤醒',kinds:['group']},
   preset:{type:'string',label:'DSH 对话预设名称',section:'会话与记忆',max:200},
   messagePolicy:{type:'select',label:'新消息处理',section:'会话与记忆',options:{queue:'排队等待',steer:'插入当前回合'}},
@@ -79,6 +78,8 @@ function patch(value,kind){
   if(!value||typeof value!=='object'||Array.isArray(value))throw Error('聊天设置必须是对象');
   const fields=fieldsFor(kind),out={};
   for(const [key,v] of Object.entries(value)){
+    // Retired keyword wake settings must not prevent loading older configurations.
+    if(key==='wakeKeywords')continue;
     const s=Object.hasOwn(fields,key)?fields[key]:null;if(!s)throw Error('此聊天域不支持设置：'+key);
     if(s.type==='boolean'&&typeof v!=='boolean'||s.type==='number'&&(!Number.isInteger(v)||v<s.min||v>s.max))throw Error(s.label+'格式或范围不正确');
     if(s.type==='select'&&(typeof v!=='string'||!Object.hasOwn(s.options,v)))throw Error(s.label+'无效');

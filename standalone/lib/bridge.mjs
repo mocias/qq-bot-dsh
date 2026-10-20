@@ -352,7 +352,7 @@ export class Bridge {
     let reply;
     try{
       if(name==='help')reply='/help 帮助 · /status 状态 · /id 标识 · /ver 版本 · /stop 停止并丢弃待处理消息 · /new 新会话 · /steer 内容 插话 · /session 历史列表 · /workspace 当前工作区 · /preset 当前预设 · /memory 记忆概览 · /doctor 本聊天检查。模型、权限和预设切换请在本机 DSH 配置。';
-      else if(name==='ver')reply='QQ 独立服务 0.12.0';
+      else if(name==='ver')reply='QQ 独立服务 0.12.1';
       else if(name==='stop'){
         this.epochs.set(route.key,(this.epochs.get(route.key)??0)+1);
         const ambient=this.ambient.get(route.key);if(ambient){clearTimeout(ambient.timer);this.ambient.delete(route.key);}

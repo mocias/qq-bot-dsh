@@ -68,9 +68,8 @@ export class Participation {
   onInput(route,config){
     if(!config.wakeEnabled)return true;
     const direct=!route.group||!route.ambient;
-    const named=(config.wakeKeywords??'').split(/[\n,，]+/).map(x=>x.trim()).filter(Boolean).some(x=>route.text.includes(x));
     const speaker=(config.wakeSpeakers??[]).includes(route.sender);
-    if(direct||named||speaker){this.inbox.setWake('active');return true;}
+    if(direct||speaker){this.inbox.setWake('active');return true;}
     return !this.inbox.sleeping();
   }
   allowsBackground(config){return !config.wakeEnabled||!this.inbox.sleeping();}

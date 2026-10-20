@@ -2,6 +2,12 @@ import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
 import { localSessionCookie } from './local-dsh-auth.mjs';
 
+export function presetIds(result){
+  const rows=Array.isArray(result)?result:result?.presets;
+  if(!Array.isArray(rows))throw Error('DSH 预设列表格式不兼容，无法确认对话预设');
+  return [...new Set(rows.map(row=>typeof row==='string'?row:row?.id??row?.name).filter(id=>typeof id==='string'&&id.length>0))];
+}
+
 // DSH Web API protocol checked against qq-bridge a56164e7, src/dsh-client.js.
 // Launch token or explicitly enabled local browser-session grant.
 export class DshClient {

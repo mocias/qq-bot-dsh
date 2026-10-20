@@ -86,7 +86,7 @@ async function mockDsh(t){
     const body=JSON.parse(Buffer.concat(chunks));requests.push(body);
     assert.equal(body.type,'client-request');assert.equal(req.url,'/api/'+body.method);
     const request=body.payload.args.request;let value={};
-    if(body.method==='agentPresets/list')value={presets:[{name:'safe-chat'}]};
+    if(body.method==='agentPresets/list')value={presets:[{id:'safe-chat'},{id:'private'},{id:'safe-group'}]};
     else if(body.method==='workspace/create')value={workspace:{workspaceId:request.path}};
     else if(body.method==='session/create')value={sessionId:'session-'+(++nextSession)};
     else if(body.method==='session/rename'){assert.match(request.title,/^\d{4}-\d{2}-\d{2}-(私聊|群聊)-\d+-\d+$/);}

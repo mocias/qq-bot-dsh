@@ -17,7 +17,7 @@ function fixture(t,extra={}){
   let now=Date.now();const waits=[],sent=[];
   const bridge=new Bridge(temp(t),{now:()=>now,random:()=>0.5,wait:async ms=>{waits.push(ms);now+=ms;},...extra});
   bridge.config={...config};bridge.status={state:'running',active:0,channels:{private:true,group:true}};
-  bridge.dsh={createSession:async()=> 's1',rename:async()=>{},close(){}};
+  bridge.dsh={probe:async()=>({presets:[{id:'test'}]}),createSession:async()=> 's1',rename:async()=>{},close(){}};
   bridge.call=async(action,params)=>{if(action==='get_group_member_info')return {group_id:params.group_id,user_id:params.user_id};sent.push({action,params});return {message_id:sent.length};};
   t.after(()=>bridge.stop());return {bridge,waits,sent};
 }
@@ -82,7 +82,7 @@ test('interval validation includes inherited defaults and per-chat overrides',()
 test('independent startup validates only selected presets and reuses one OneBot connection',async t=>{
   const server=new WebSocketServer({port:0,host:'127.0.0.1'});await once(server,'listening');let connections=0;
   server.on('connection',socket=>{connections++;socket.on('message',bytes=>{const v=JSON.parse(bytes);socket.send(JSON.stringify({echo:v.echo,status:'ok',retcode:0,data:v.action==='get_login_info'?{user_id:config.botQQ}:{online:true,good:true}}));});});
-  class Dsh{async probe(){}close(){}}
+  class Dsh{async probe(){return {presets:[{id:'test'}]};}close(){}}
   const bridge=new Bridge(temp(t),{Dsh});
   t.after(async()=>{bridge.stop();for(const socket of server.clients)socket.terminate();await new Promise(r=>server.close(r));});
   const c={...config,groupPreset:'',qqUrl:'ws://127.0.0.1:'+server.address().port};

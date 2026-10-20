@@ -12,7 +12,7 @@ export const policyFields={
   pokeSend:bool('允许发送拍一拍','消息功能'),
   wakeEnabled:{...bool('启用潜水与唤醒','潜水与唤醒'),help:'潜水期间暂停被动接话和定时搭话；明确预约的提醒照常投递，不等潜水结束。直接私聊、@、引用机器人及已启用的拍一拍仍可唤醒。到期只恢复原调度。'},
   wakeSpeakers:{type:'ids',label:'潜水唤醒群成员（每行一个 QQ）',section:'潜水与唤醒',kinds:['group']},
-  preset:{type:'string',label:'DSH 对话预设名称',section:'会话与记忆',max:200},
+  preset:{type:'string',label:'DSH 对话预设 ID',section:'会话与记忆',max:200,help:'填写 DSH 中实际存在的预设 ID，不是群名、人设名或对话名称。可在“连接与配置”检查 DSH 连接并查看可用预设。群专用预设须先在 DSH 创建；启动前会校验。'},
   messagePolicy:{type:'select',label:'新消息处理',section:'会话与记忆',options:{queue:'排队等待',steer:'插入当前回合'}},
   memoryEnabled:bool('长期记忆','会话与记忆'),
   memoryAutoInject:bool('自动注入本聊天记忆资料','会话与记忆'),

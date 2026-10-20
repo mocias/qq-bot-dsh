@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import WebSocket from 'ws';
-import { DshClient } from './dsh.mjs';
+import { DshClient,presetIds } from './dsh.mjs';
 import { readJson, writeJson } from './config.mjs';
 import { MemoryStore, decodeReply, preparePrompt } from './memory.mjs';
 import { initializeLife, noteArrival, observeCompaction, maintain, due } from './lifecycle.mjs';
@@ -112,20 +112,29 @@ export class Bridge {
     this.systemLog?.record('bridge.start.requested',{component:'qq'});
     if(this.status.state==='connecting')throw Error('正在连接，请稍后');
     if(this.status.state==='running')config=this.config;
+    const required=[];
     for(const kind of selected)for(const id of config[kind==='private'?'privateUsers':'groups']){
       const effective=resolveChatConfig(config,(config.botQQ||'00000')+'/'+kind+'/'+id);
-      if(!effective[kind==='private'?'privatePreset':'groupPreset'])throw Error('请在会话与聊天中设置'+(kind==='private'?'私聊':'群聊')+'的 DSH 预设');
+      const preset=effective[kind==='private'?'privatePreset':'groupPreset'];
+      if(!preset)throw Error('请在会话与聊天中设置'+(kind==='private'?'私聊':'群聊')+'的 DSH 预设');
+      required.push({kind,preset});
     }
+    const checkPresets=result=>{
+      const ids=presetIds(result);
+      for(const {kind,preset} of required)if(!ids.includes(preset))throw Error((kind==='group'?'群聊':'私聊')+' DSH 预设“'+preset+'”不存在。请先在 DSH 创建该预设，或在“会话与聊天”填写实际预设 ID；这里不是群名或对话名称。');
+    };
     if(!selected.some(k=>config[k==='private'?'privateUsers':'groups'].length))throw Error('请先设置所选类型的允许接收名单');
     if(this.status.state==='running'){
+      const generation=this.generation,revision=this.channelRevision??0;checkPresets(await this.dsh.probe());
+      if(this.status.state!=='running'||generation!==this.generation||revision!==(this.channelRevision??0))throw Error('启动已取消');
       for(const k of selected)this.status.channels[k]=true;
-      this.syncReminders();return;
+      this.status.lastError='';this.syncReminders();return;
     }
     if(this.jobs.size||this.queues.size||this.maintenance.size||this.outbox.size)throw Error('上一轮任务正在退出，请稍后启动');
     this.config = structuredClone(config); this.dsh = new this.Dsh(config);
     const generation = ++this.generation; this.status = { state: 'connecting', active: this.status.active, lastError: '',channels:{private:selected.includes('private'),group:selected.includes('group')} };
     try {
-      await this.dsh.probe();
+      checkPresets(await this.dsh.probe());
       if (generation !== this.generation) throw Error('启动已取消');
       const socket = this.socket = new WebSocket(config.qqUrl, { headers: config.qqToken ? { Authorization: 'Bearer '+config.qqToken } : {}, handshakeTimeout: 10000, maxPayload: 16*1024*1024, followRedirects: false });
       await new Promise((resolve,reject) => {
@@ -150,6 +159,7 @@ export class Bridge {
   }
   stop(kind='all') {
     const selected=kinds(kind);
+    this.channelRevision=(this.channelRevision??0)+1;
     if(kind!=='all'&&this.status.state==='connecting')throw Error('正在连接，请先停止全部');
     if(kind!=='all'&&this.status.state==='running'){
       this.status.channels??={private:true,group:true};
@@ -387,7 +397,7 @@ export class Bridge {
     let reply;
     try{
       if(name==='help')reply='/help 帮助 · /status 状态 · /id 标识 · /ver 版本 · /stop 停止并丢弃待处理消息 · /new 新会话 · /steer 内容 插话 · /session 历史列表 · /workspace 当前工作区 · /preset 当前预设 · /memory 记忆概览 · /doctor 本聊天检查。模型、权限和预设切换请在本机 DSH 配置。';
-      else if(name==='ver')reply='QQ 独立服务 0.13.0';
+      else if(name==='ver')reply='QQ 独立服务 0.13.1';
       else if(name==='stop'){
         this.epochs.set(route.key,(this.epochs.get(route.key)??0)+1);
         const ambient=this.ambient.get(route.key);if(ambient){clearTimeout(ambient.timer);this.ambient.delete(route.key);}

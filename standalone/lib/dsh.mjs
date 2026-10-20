@@ -80,7 +80,7 @@ export class DshClient {
     this.sockets.add(socket);
     const streamId = randomUUID();
     let readyResolve, readyReject, finishResolve, finishReject, submitted = false, currentTurn, settled=false, abortRequested=false;
-    const inputs=new Map(), turns=new Map(); let pendingRPC=0;
+    const inputs=new Map(), turns=new Map(),seenEvents=new Set(); let pendingRPC=0,answerEpoch=0,messageOrder=0;
     const ready = new Promise((resolve,reject) => { readyResolve=resolve; readyReject=reject; });
     const finished = new Promise((resolve,reject) => { finishResolve=resolve; finishReject=reject; });
     // Both promises can reject before the sequential awaits begin.
@@ -93,7 +93,8 @@ export class DshClient {
       const affected=[...new Set(ids)].map(id=>turns.get(id));
       const bad=affected.find(t=>t.reason!=='completed');
       if(abortRequested||bad){reject(Object.assign(Error(abortRequested?'后台整理已让路':'DSH 回合未正常完成'),{cancelled:abortRequested,acknowledged:abortRequested&&affected.every(t=>t.ended)}));return;}
-      settled=true;run.accepting=false;finishResolve(affected.at(-1)?.text.trim()||'');
+      const messages=affected.flatMap(t=>t.messages).filter(m=>m.epoch===answerEpoch).sort((a,b)=>a.order-b.order).map(m=>m.text.trim()).filter(Boolean);
+      settled=true;run.accepting=false;finishResolve(options.collectMessages?messages:messages.at(-1)||'');
     };
     const run={accepting:false,submit:async(content,mode)=>{
       if(settled)throw Error('当前回合已结束');
@@ -125,19 +126,27 @@ export class DshClient {
       if (!submitted || frame.value?.type !== 'event') return;
       const event = frame.value.event, data = event?.data;
       try {
+        if(Number.isSafeInteger(event?.seq)){if(seenEvents.has(event.seq))return;seenEvents.add(event.seq);}
         options.onEvent?.(event);
-        if(event?.type==='turn/start'){currentTurn=data.turn;turns.set(currentTurn,{text:'',ended:false});}
+        if(event?.type==='turn/start'){currentTurn=data.turn;if(!turns.has(currentTurn))turns.set(currentTurn,{messages:[],ended:false});}
         if(event?.type==='user/message'){
           const message=data.message??data;
           const body=(message.content??[]).filter(x=>x.type==='text').map(x=>x.text).join('\n');
           const id=message.source?.rpcId??body.match(/\[QQ_INPUT:([a-f0-9-]+)\]/)?.[1];
-          if(inputs.has(id)&&currentTurn!==undefined)inputs.set(id,currentTurn);
+          if(inputs.has(id)&&inputs.get(id)===null&&currentTurn!==undefined){inputs.set(id,currentTurn);answerEpoch++;}
         }
         const turn=turns.get(data?.turn);
         if(event?.type==='assistant/message'&&turn){
           const value=(data.message?.content??[]).filter(x=>x.type==='text').map(x=>x.text).join('');
           if(value.length>100000)throw Error('DSH 回复过长');
-          if(value)turn.text=value; // intermediate answers before steering are superseded
+          if(value){
+            const id=data.message?.id??(Number.isSafeInteger(event.seq)?'event:'+event.seq:null);
+            const previous=id===null?null:turn.messages.find(m=>m.id===id);
+            if(previous)previous.text=value;
+            else turn.messages.push({id,text:value,epoch:answerEpoch,order:messageOrder++});
+            const messages=[...turns.values()].flatMap(t=>t.messages);
+            if(messages.length>100||messages.reduce((sum,m)=>sum+m.text.length,0)>100000)throw Error('DSH 多段回复过长');
+          }
         }
         if(event?.type==='turn/end'&&turn){turn.ended=true;turn.reason=typeof data.reason==='string'?data.reason:data.reason?.kind;complete();}
       } catch(error){reject(error);}

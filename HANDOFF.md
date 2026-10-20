@@ -12,7 +12,9 @@
 
 `QQ / NapCat OneBot v11 → standalone Node 服务 → DSH Web API → DSH Agent / 模型`
 
-`standalone/` 是独立进程，不安装为 DSH 插件；DSH 仍必须另行运行。协议参考 qq-bridge 的 `a56164e70a0521a7829138a42eee76066fde2b8b` 版本，没有引入其完整业务运行时。当前 standalone 版本为 0.11.0。
+`standalone/` 是独立进程，不安装为 DSH 插件；DSH 仍必须另行运行。协议参考 qq-bridge 的 `a56164e70a0521a7829138a42eee76066fde2b8b` 版本，没有引入其完整业务运行时。当前 standalone 版本为 0.11.1。
+
+0.11.1 修复 DSH 多段正式回答被后续消息覆盖、宿主工具续答只剩最终回复的问题。QQ 路径保留完整消息集合，仅排除实际插话替代的旧代次；逐段回执、群文字/图片合并、内部内容过滤和失败不重发仍有效。见 `docs/MULTI-REPLY-FIX-0.11.1.md`。
 
 0.11 为群聊开放自动轮换，沿用空闲、成功压缩、持久化记忆回执与新消息优先条件。所有新建会话统一命名并持久化自然编号，详见 `docs/SESSIONS-0.11.md`。
 

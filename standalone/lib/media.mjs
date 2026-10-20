@@ -217,7 +217,11 @@ export class Media {
         segments.push({type:'image',data:{file:'base64://'+bytes.toString('base64')}});
       }
     }
-    if(!segments.some(x=>x.type==='record')&&reply.trim()&&reply.trim()!=='[[QQ_SILENT]]')segments.unshift({type:'text',data:{text:reply.slice(0,4000)}});
+    if(!segments.some(x=>x.type==='record')&&reply.trim()&&reply.trim()!=='[[QQ_SILENT]]'){
+      const chars=Array.from(reply),text=[];
+      for(let offset=0;offset<chars.length;offset+=4000)text.push({type:'text',data:{text:chars.slice(offset,offset+4000).join('')}});
+      segments.unshift(...text);
+    }
     if(q.replyTo&&segments.length){await this.reference(route,q.replyTo);segments.unshift({type:'reply',data:{id:String(q.replyTo)}});}
     return segments.length?{action:route.group?'send_group_msg':'send_private_msg',params:{[route.group?'group_id':'user_id']:route.id,message:segments}}:null;
   }

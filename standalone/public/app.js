@@ -67,9 +67,9 @@ function paintPolicy(data){
       state.textContent=`未读 ${value.unreadCount} 条；${value.sleeping?'潜水至 '+new Date(value.wake.until).toLocaleString():'活跃'}。`+(value.truncatedBeforeSeq?'更早记录已超出保留上限。':'');
       preview.textContent=value.messages.map(m=>`#${m.seq} · ${m.sender}：${m.text}${m.textTruncated?'（摘要）':''}`).join('\n');
     };
-    for(const [label,mode]of [['刷新状态',null],['潜水 30 分钟','diving'],['立即唤醒','active']]){
+    for(const [label,mode]of [['刷新状态',null],['潜水 1800 秒','diving'],['立即唤醒','active']]){
       const button=element('button',label);button.type='button';button.className='secondary';
-      button.onclick=async()=>{button.disabled=true;try{if(mode)await request('/api/chat-wake',{key,mode,minutes:30});await refresh();}catch(error){state.textContent=error.message;}finally{button.disabled=false;}};
+      button.onclick=async()=>{button.disabled=true;try{if(mode)await request('/api/chat-wake',{key,mode,seconds:1800});await refresh();}catch(error){state.textContent=error.message;}finally{button.disabled=false;}};
       actions.append(button);
     }
     card.append(actions,state,preview);container.append(card);
@@ -334,7 +334,7 @@ function paintManaged(data){
  $('slang-card').hidden=!loadedKey.includes('/group/');
  $('memory-overview').textContent=chatLabel(loadedKey)+' · 长期记忆：'+(data.policy?.memoryEnabled?'开启':'关闭')+' · 原 dsh-plugin-memory 核心适配。此处修改仅影响选中的聊天。';
  $('memory-directory').value=data.detail.insights.store;
- $('memory-settings-summary').textContent='自动注入：'+(data.policy?.memoryAutoInject?'开启':'关闭')+' · memory 操作协议：'+(data.policy?.memoryRegisterSkill?'开启':'关闭')+' · 仅最近活跃聊天注入：'+(data.policy?.memoryActiveOnly?'开启':'关闭')+' · 主动追忆：'+(data.policy?.proactiveEnabled?'开启':'关闭');
+ $('memory-settings-summary').textContent='新会话记忆注入：'+(data.policy?.memoryAutoInject?'开启':'关闭')+' · memory 操作协议：'+(data.policy?.memoryRegisterSkill?'开启':'关闭')+' · 仅最近活跃聊天注入：'+(data.policy?.memoryActiveOnly?'开启':'关闭')+' · 主动追忆：'+(data.policy?.proactiveEnabled?'开启':'关闭');
  $('memory-settings').disabled=loadedKey.split('/')[0]!==currentBot;
  paintLife({lifecycle:data.lifecycle??[]});$('persona-text').value=data.detail.persona;
  $('persona-state').textContent='已加载此聊天人设。';
@@ -447,7 +447,7 @@ $('memory-reset').onclick=()=>action($('memory-reset'),()=>resetMemory(false));
 $('memory-reset-account').onclick=()=>action($('memory-reset-account'),()=>resetMemory(true));
 
 const logNames={'service.started':'服务启动','service.stopped':'服务停止','service.error':'服务异常','operation.completed':'操作完成','operation.failed':'操作失败','memory.reset':'记忆已重置','bridge.start.requested':'正在启动 QQ 接收','bridge.connected':'QQ 连接成功','bridge.stopped':'QQ 接收已停止','bridge.error':'QQ 处理异常（详情见连接状态）','turn.started':'Agent 回合开始','turn.completed':'Agent 回合结束','turn.failed':'Agent 回合失败','message.accepted':'已接收一条名单内消息','maintenance.started':'记忆整理开始','maintenance.completed':'记忆整理结束','maintenance.failed':'记忆整理失败','message.sent':'消息投递成功','message.failed':'消息投递失败','message.unknown':'消息投递结果未知'};
-Object.assign(logNames,{'input.observed':'收到名单内 QQ 消息，已进入路由','input.channel_disabled':'收到消息，但对应私聊/群聊接收未启动','input.mention_required':'已索引；未开启群聊自主参与，等待 @ 或引用机器人','input.diving':'已索引；潜水期间不触发普通群消息','ambient.buffered':'等待合并群消息','ambient.cooldown':'未提交 DSH：自主参与判断间隔尚未结束（剩余）','ambient.busy':'未提交 DSH：该聊天已有任务；消息保留在索引','ambient.submitted':'合并完成，提交 Agent','delivery.hourly_limit':'未投递：达到群聊每小时回复上限','delivery.gap':'等待群聊最短发送间隔','delivery.rate_limit':'未投递：群聊发送频率限制','stream.failed':'DSH 回合中断或失败','stream.snapshot':'DSH 会话订阅已就绪','stream.turn.start':'DSH 回合开始','stream.user.message':'DSH 已接收输入','stream.assistant.message':'DSH 产生一段正式回复','stream.turn.end':'DSH 回合结束','stream.tool.call':'DSH 调用工具','stream.tool.result':'DSH 工具完成','stream.approval.request':'DSH 请求审批'});
+Object.assign(logNames,{'session.created':'首次创建对话','session.recovered':'上次模型执行状态不确定，隔离旧会话后创建对话','session.rotated':'已完成记忆整理，按压缩次数轮换对话','session.manual':'面板或 QQ 命令手动创建对话','session.uncertain':'模型回合状态不确定；下次输入将隔离旧会话','session.local_error':'本地回复处理失败；模型已结束，保留当前会话','context.initialized':'新会话已注入人设、记忆与工具协议','context.messages':'已提交最新消息段（沿用已有会话资料）','input.observed':'收到名单内 QQ 消息，已进入路由','input.channel_disabled':'收到消息，但对应私聊/群聊接收未启动','input.mention_required':'已索引；未开启群聊自主参与，等待 @ 或引用机器人','input.diving':'已索引；潜水期间不触发普通群消息','ambient.buffered':'等待合并群消息','ambient.cooldown':'未提交 DSH：自主参与判断间隔尚未结束（剩余）','ambient.busy':'未提交 DSH：该聊天已有任务；消息保留在索引','ambient.submitted':'合并完成，提交 Agent','delivery.hourly_limit':'未投递：达到群聊每小时回复上限','delivery.gap':'等待群聊最短发送间隔','delivery.rate_limit':'未投递：群聊发送频率限制','stream.failed':'DSH 回合中断或失败','stream.snapshot':'DSH 会话订阅已就绪','stream.turn.start':'DSH 回合开始','stream.user.message':'DSH 已接收输入','stream.assistant.message':'DSH 产生一段正式回复','stream.turn.end':'DSH 回合结束','stream.tool.call':'DSH 调用工具','stream.tool.result':'DSH 工具完成','stream.approval.request':'DSH 请求审批'});
 function logLabel(event){
  if(logNames[event])return logNames[event];
  const match=event.match(/^rpc\.(.+)\.(started|completed|failed)$/);

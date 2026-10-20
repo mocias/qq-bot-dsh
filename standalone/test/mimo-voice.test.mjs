@@ -111,7 +111,7 @@ test('local mode keeps local validation and never calls MiMo',async t=>{
 });
 test('QQ incoming/outgoing media uses selected MiMo service and preserves text fallback',async t=>{
   const requests=[],voice=service(t,async(url,options)=>{const payload=JSON.parse(options.body);requests.push(payload);return payload.model.endsWith('asr')?response({content:'QQ 语音识别'}):response({audio:{data:wav().toString('base64')}});});
-  const media=new Media(voice.root,{voice,call:async()=>({base64:wav().toString('base64')})});
+  const media=new Media(voice.root,{voice,call:async()=>({base64:wav().toString('base64')}),now:()=>new Date(2026,0,1,12).getTime()});
   const route={key:'123456/private/234567',id:'234567',sender:'234567',group:false,messageId:'m1',text:'',segments:[{type:'record',data:{file:'opaque'}}]};
   const incoming=await media.incoming(route,config);assert.match(incoming.text,/QQ 语音识别/);assert.deepEqual(incoming.mediaFailures,[]);
   const result=await media.outgoing({reply:'',qq:{voice:'你好'}},route,{workspace:voice.root},{...config,voiceReplyMode:'voice'});

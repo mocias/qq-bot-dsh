@@ -237,7 +237,7 @@ test('proactive session cap prevents further attempts but a successor has its ow
  const runtime=temp(t);let now=Date.parse('2026-10-20T02:00:00Z');
  const key='100000001/private/100000002',route={key,group:false,id:'100000002'},session={route,lastUserAt:now,proactiveAttempts:0};initializeLife(session,now);
  const store=new MemoryStore(runtime,key);store.commit([{action:'write',page:'user/tea.md',text:'# Tea\n喜欢茶',reason:'request',evidence:['m']}],{id:'m',evidenceIds:['m'],summary:'Tea'});
- const config=validate({recallEnabled:true,recallMinMinutes:1,recallMaxMinutes:1,recallMaxPerDay:5,proactiveMaxPerSession:1}),scheduler=new Proactive(runtime,{now:()=>now,random:()=>0}),opts={activeKey:key};
+ const config=validate({recallEnabled:true,recallMinSeconds:60,recallMaxSeconds:60,recallMaxPerDay:5,proactiveMaxPerSession:1}),scheduler=new Proactive(runtime,{now:()=>now,random:()=>0}),opts={activeKey:key};
  assert.equal(await scheduler.candidate(session,config,store,opts),null);now+=60001;
  assert.ok(await scheduler.candidate(session,config,store,opts));session.proactiveAttempts=1;
  assert.equal(await scheduler.candidate(session,config,store,opts),null);

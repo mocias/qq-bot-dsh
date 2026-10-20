@@ -56,9 +56,9 @@ export class ChatInbox {
     for(const m of s.messages){if(m.seq<=s.readThrough)continue;if(!m.outgoing&&!m.read)break;s.readThrough=m.seq;}
     this.save(s);
   }
-  setWake(mode,minutes=30){
-    if(!['active','diving'].includes(mode)||!Number.isInteger(minutes)||minutes<1||minutes>1440)throw Error('潜水模式或时长无效');
-    const s=this.read();s.wake={mode,until:mode==='diving'?this.now()+minutes*60000:0};this.save(s);return s.wake;
+  setWake(mode,seconds=1800){
+    if(!['active','diving'].includes(mode)||!Number.isInteger(seconds)||seconds<1||seconds>86400)throw Error('潜水模式或时长无效（1～86400 秒）');
+    const s=this.read();s.wake={mode,until:mode==='diving'?this.now()+seconds*1000:0};this.save(s);return s.wake;
   }
   sleeping(){const w=this.read().wake;return w.mode==='diving'&&this.now()<w.until;}
 }

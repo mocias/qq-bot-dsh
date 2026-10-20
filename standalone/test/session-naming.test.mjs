@@ -14,7 +14,7 @@ function setup(t){
   t.after(()=>fs.rmSync(runtime,{recursive:true,force:true}));
   const bridge=new Bridge(runtime,{now:()=>Date.parse('2026-10-20T16:01:00Z'),media:{outgoing:async()=>null}});
   bridge.config=validate({botQQ:'100000001',privateUsers:['100000002'],groups:['100000003'],privatePreset:'private',groupPreset:'group',
-    chatPolicy:{group:{rotationEnabled:true,rotateAfterCompactions:1,memoryIdleMinutes:1}}});
+    chatPolicy:{group:{rotationEnabled:true,rotateAfterCompactions:1,memoryIdleSeconds:60}}});
   bridge.status.state='running';bridge.generation=1;
   let count=0;const titles=[];
   bridge.dsh={createSession:async()=>`session-${++count}`,rename:async(id,title)=>titles.push({id,title}),prompt:async()=>'{"reply":"","memory":[],"summary":"无新增"}'};

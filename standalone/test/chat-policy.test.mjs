@@ -36,7 +36,7 @@ test('policy rejects unknown settings, wrong domains and invalid merged interval
   for(const chatPolicy of [
     {private:{mimoApiKey:'bad'}},{private:{groupAmbientEnabled:true}},{group:{rotationEnabled:'true'}},
     {private:{imageSend:'false'}},{private:{adminUsers:['../bad']}},{overrides:{'../bad':{}}},
-    {private:{proactiveMinMinutes:150},overrides:{[privateKey]:{proactiveMaxMinutes:100}}},
+    {private:{proactiveMinSeconds:9000},overrides:{[privateKey]:{proactiveMaxSeconds:6000}}},
   ])assert.throws(()=>validate({chatPolicy},config()));
   assert.throws(()=>validate({chatPolicy:JSON.parse('{"private":{"__proto__":{}}}')},config()));
 });
@@ -98,12 +98,12 @@ test('bridge uses recipient preset, memory switch and reminder subscriptions wit
   bridge.syncReminders();assert.deepEqual(subscribed.at(-1),[privateKey]);
 });
 test('background candidate receives effective per-chat settings',async t=>{
-  const root=temp(t),seen=[],bridge=new Bridge(root,{proactive:{candidate:async(s,c)=>{seen.push([s.route.key,c.recallEnabled,c.memoryIdleMinutes]);return null;}}});t.after(()=>bridge.stop());
-  bridge.config=validate({chatPolicy:{private:{proactiveEnabled:false},overrides:{[privateKey]:{proactiveEnabled:true,memoryIdleMinutes:77}}}},config());
+  const root=temp(t),seen=[],bridge=new Bridge(root,{proactive:{candidate:async(s,c)=>{seen.push([s.route.key,c.recallEnabled,c.memoryIdleSeconds]);return null;}}});t.after(()=>bridge.stop());
+  bridge.config=validate({chatPolicy:{private:{proactiveEnabled:false},overrides:{[privateKey]:{proactiveEnabled:true,memoryIdleSeconds:4620}}}},config());
   bridge.status.state='running';bridge.status.account=bot;bridge.generation=1;
   bridge.syncReminders=()=>{};bridge.sweep=async()=>{};
   for(const key of [privateKey,`${bot}/private/${other}`]){const r=route(key),s={id:key,route:r};initializeLife(s);bridge.state.sessions[bridge.scope(r)]=s;}
-  await bridge.tick();assert.deepEqual(seen,[[privateKey,true,77],[`${bot}/private/${other}`,false,30]]);
+  await bridge.tick();assert.deepEqual(seen,[[privateKey,true,4620],[`${bot}/private/${other}`,false,1800]]);
 });
 test('scoped policy HTTP enforces auth, revision, allowlist and inheritance reset without touching credentials',async t=>{
   const runtime=temp(t);writeJson(path.join(runtime,'config.private.json'),{...config(),mimoApiKey:'test-only-preserved'});

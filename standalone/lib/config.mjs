@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import {migrateIntervals} from './timing.mjs';
 import {validateChatPolicy} from './chat-policy.mjs';
 
 export const defaults = {
@@ -10,18 +11,18 @@ export const defaults = {
   chatPolicy: {private:{},group:{},overrides:{}},
   dshUrl: 'http://127.0.0.1:3080', dshToken: '', dshLocalAuth: false,
   qqUrl: 'ws://127.0.0.1:3001', qqToken: '', botQQ: '',
-  adminUsers: [], qqFiles: false, groupAmbientEnabled: false, groupAmbientDelaySeconds: 10, groupAmbientMinMinutes: 5, groupToolsEnabled: false, knowledgeEnabled: false, remindersEnabled: false,
+  adminUsers: [], qqFiles: false, groupAmbientEnabled: false, groupAmbientDelaySeconds: 10, groupAmbientMinSeconds: 300, groupToolsEnabled: false, knowledgeEnabled: false, remindersEnabled: false,
   privateUsers: [], groups: [], privatePreset: '', groupPreset: '',
   voice: 'Microsoft Huihui Desktop', model: 'small',
   voiceProvider: 'local', mimoApiKey: '', mimoTtsMode: 'preset', mimoVoice: 'mimo_default',
   mimoReferenceId: '', mimoStyle: '', mimoDesign: '', mimoAsrLanguage: 'auto',
-  memoryEnabled: true, memoryIdleMinutes: 30, rotateAfterCompactions: 15,
+  memoryEnabled: true, memoryIdleSeconds: 1800, rotateAfterCompactions: 15,
   memoryAutoInject:true,memoryRegisterSkill:true,memoryActiveOnly:false,memoryBootMaxChars:6000,memoryPageMaxChars:10000,proactiveMaxPerSession:0,
   rotationEnabled: true, privateMessagePolicy: 'steer', groupMessagePolicy: 'queue',
   qqImages: true, qqForward: true, qqVoiceReceive: true, qqVoiceSend: true,
   qqMediaRoots: [], ffmpegPath: '', voiceReplyMode: 'auto', voiceQuietMode:'scheduled', voiceQuietStart: 23, voiceQuietEnd: 8,
-  recallEnabled: false, recallMinMinutes: 30, recallMaxMinutes: 120, recallMaxPerDay: 3,
-  groupProactiveEnabled: false, groupProactiveMinMinutes: 30, groupProactiveMaxMinutes: 120, groupProactiveMaxPerDay: 3,
+  recallEnabled: false, recallMinSeconds: 1800, recallMaxSeconds: 7200, recallMaxPerDay: 3,
+  groupProactiveEnabled: false, groupProactiveMinSeconds: 1800, groupProactiveMaxSeconds: 7200, groupProactiveMaxPerDay: 3,
   groupMinReplyGapSeconds: 0, groupMaxRepliesPerHour: 0,
   proactiveStart: '09:00', proactiveEnd: '23:00',
   qqExecutable: '', napcatFrameworkDir: '',
@@ -35,6 +36,7 @@ export function localUrl(value, schemes) {
   return url.origin;
 }
 export function validate(input, previous = defaults) {
+  input=migrateIntervals(input);previous=migrateIntervals(previous);
   const out = { ...defaults, ...previous };
   for (const field of Object.keys(defaults)) {
     if(field==='chatPolicy')continue;
@@ -54,7 +56,9 @@ export function validate(input, previous = defaults) {
       const budget=field!=='proactiveMaxPerSession';
       if(!Number.isInteger(value)||value<(budget?1000:0)||value>(budget?30000:100))throw Error('记忆容量或次数超出范围');
       out[field]=value;
-    } else if (['groupAmbientDelaySeconds','groupAmbientMinMinutes','memoryIdleMinutes','rotateAfterCompactions','recallMinMinutes','recallMaxMinutes','recallMaxPerDay','groupProactiveMinMinutes','groupProactiveMaxMinutes','groupProactiveMaxPerDay','voiceQuietStart','voiceQuietEnd','groupMinReplyGapSeconds','groupMaxRepliesPerHour'].includes(field)) {
+    } else if (['memoryIdleSeconds','groupAmbientMinSeconds','recallMinSeconds','recallMaxSeconds','groupProactiveMinSeconds','groupProactiveMaxSeconds'].includes(field)) {
+      if(!Number.isInteger(value)||value<1||value>604800)throw Error('时间间隔应为 1～604800 秒');out[field]=value;
+    } else if (['groupAmbientDelaySeconds','rotateAfterCompactions','recallMaxPerDay','groupProactiveMaxPerDay','voiceQuietStart','voiceQuietEnd','groupMinReplyGapSeconds','groupMaxRepliesPerHour'].includes(field)) {
       const zero=field.endsWith('PerDay')||field.startsWith('voiceQuiet')||['groupMinReplyGapSeconds','groupMaxRepliesPerHour'].includes(field);
       const max=field.startsWith('voiceQuiet')?23:field.endsWith('PerDay')?100:10080;
       if(!Number.isInteger(value)||value<(zero?0:1)||value>max) throw Error('时间或次数设置超出范围'); out[field]=value;
@@ -86,7 +90,7 @@ export function validate(input, previous = defaults) {
   if(!['auto','text','voice'].includes(out.voiceReplyMode))throw Error('语音回复模式无效');
   if(!['scheduled','always','never'].includes(out.voiceQuietMode))throw Error('语音安静模式无效');
   for(const f of ['proactiveStart','proactiveEnd'])if(!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(out[f]))throw Error('主动消息时段格式应为 HH:mm');
-  if(out.recallMaxMinutes<out.recallMinMinutes||out.groupProactiveMaxMinutes<out.groupProactiveMinMinutes)throw Error('最长间隔不能小于最短间隔');
+  if(out.recallMaxSeconds<out.recallMinSeconds||out.groupProactiveMaxSeconds<out.groupProactiveMinSeconds)throw Error('最长间隔不能小于最短间隔');
   for (const field of ['privatePreset', 'groupPreset']) if (out[field].length > 200) throw Error('预设名称过长');
   out.chatPolicy=validateChatPolicy(input.chatPolicy??out.chatPolicy,out);
   return out;

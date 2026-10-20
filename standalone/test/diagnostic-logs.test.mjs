@@ -17,7 +17,7 @@ test('ordinary group input remains observable during cooldown and direct input s
  t.mock.timers.enable({apis:['setTimeout']});
  let now=1000000;
  const bridge=new Bridge(runtime,{now:()=>now}),accepted=[];
- bridge.config=validate({botQQ:'100000001',groups:['100000003'],groupAmbientEnabled:true,groupAmbientDelaySeconds:10,groupAmbientMinMinutes:5,memoryEnabled:false});
+ bridge.config=validate({botQQ:'100000001',groups:['100000003'],groupAmbientEnabled:true,groupAmbientDelaySeconds:10,groupAmbientMinSeconds:300,memoryEnabled:false});
  bridge.status={state:'running',active:0,channels:{group:true,private:false}};
  bridge.systemLog=new SystemLog(runtime);bridge.accept=r=>accepted.push(r);
  const key='100000001/group/100000003';

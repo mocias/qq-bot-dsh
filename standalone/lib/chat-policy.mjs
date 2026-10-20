@@ -1,3 +1,4 @@
+import {migrateIntervals} from './timing.mjs';
 import {createHash} from 'node:crypto';
 
 const bool=(label,section,kinds)=>({type:'boolean',label,section,kinds});
@@ -15,12 +16,12 @@ export const policyFields={
   preset:{type:'string',label:'DSH 对话预设 ID',section:'会话与记忆',max:200,help:'填写 DSH 中实际存在的预设 ID，不是群名、人设名或对话名称。可在“连接与配置”检查 DSH 连接并查看可用预设。群专用预设须先在 DSH 创建；启动前会校验。'},
   messagePolicy:{type:'select',label:'新消息处理',section:'会话与记忆',options:{queue:'排队等待',steer:'插入当前回合'}},
   memoryEnabled:bool('长期记忆','会话与记忆'),
-  memoryAutoInject:bool('自动注入本聊天记忆资料','会话与记忆'),
-  memoryRegisterSkill:bool('加载原 memory 操作协议','会话与记忆'),
-  memoryActiveOnly:bool('仅最近收到消息的聊天注入记忆','会话与记忆'),
+  memoryAutoInject:{...bool('新会话开始时注入本聊天记忆','会话与记忆'),help:'人设、记忆快照和工具协议在新会话首次输入时加载一次；之后只传最新消息段。人设在面板被修改时会单独通知一次。'},
+  memoryRegisterSkill:bool('新会话加载原 memory 操作协议','会话与记忆'),
+  memoryActiveOnly:bool('仅最近活跃聊天的新会话注入记忆','会话与记忆'),
   memoryBootMaxChars:number('启动资料预算（字数）','会话与记忆',1000,30000),
   memoryPageMaxChars:number('相关记忆页预算（字数）','会话与记忆',1000,30000),
-  memoryIdleMinutes:number('有新压缩后，连续空闲多久整理（分钟）','会话与记忆',1,10080),
+  memoryIdleSeconds:number('有新压缩后，连续空闲多久整理（秒）','会话与记忆',1,604800),
   rotationEnabled:{...bool('记忆整理成功后自动轮换会话','会话与记忆'),help:'私聊和群聊均支持。达到成功压缩次数、连续空闲且记忆已落盘后，在原工作区开启新会话；保留长期记忆和旧会话。'},
   rotateAfterCompactions:number('轮换前成功压缩次数','会话与记忆',1,10080),
   imageReceive:bool('接收图片并交给模型理解','消息功能'),
@@ -40,15 +41,15 @@ export const policyFields={
   stickerCollect:{...bool('允许面板将此聊天的表情收藏到 QQ','表情与黑话'),help:'仅允许手动点击“收藏到 QQ”；通过已连接的 QQ 接口，收藏到当前机器人账号的 QQ 表情库。不会自动收藏全部图片，也不会发送消息。'},
   slangLearn:bool('学习群聊黑话（只提交待审核候选）','表情与黑话',['group']),
   proactiveEnabled:{...bool('定时主动搭话','定时搭话与追忆'),help:'按时间检查：私聊从长期记忆中追忆；群聊读取近期聊天寻找话题。不需要刚收到消息，也可以选择不发言。'},
-  proactiveMinMinutes:number('主动搭话最短间隔（分钟）','定时搭话与追忆',1,10080),
-  proactiveMaxMinutes:number('主动搭话最长间隔（分钟）','定时搭话与追忆',1,10080),
+  proactiveMinSeconds:number('主动搭话最短间隔（秒）','定时搭话与追忆',1,604800),
+  proactiveMaxSeconds:number('主动搭话最长间隔（秒）','定时搭话与追忆',1,604800),
   proactiveMaxPerDay:number('每日最多主动尝试次数','定时搭话与追忆',0,100),
   proactiveMaxPerSession:number('每个会话最多主动尝试次数（0 不限）','定时搭话与追忆',0,100),
   proactiveStart:{type:'time',label:'主动消息开始时间（北京时间）',section:'定时搭话与追忆'},
   proactiveEnd:{type:'time',label:'主动消息结束时间（北京时间）',section:'定时搭话与追忆'},
   groupAmbientEnabled:{...bool('收到未 @ 的群消息时择机接话','群消息触发接话',['group']),help:'由新群消息触发：合并一段消息后判断是否接话。与定时搭话共用队列和群发送限额；有新群消息时优先处理消息。'},
   groupAmbientDelaySeconds:{...number('群消息合并等待（秒）','群消息触发接话',1,10080),kinds:['group']},
-  groupAmbientMinMinutes:{...number('自主参与判断最短间隔（分钟）','群消息触发接话',1,10080),kinds:['group']},
+  groupAmbientMinSeconds:{...number('自主参与判断最短间隔（秒）','群消息触发接话',1,604800),kinds:['group']},
   groupMinReplyGapSeconds:{...number('两次发送最短间隔（秒，0 不限制）','群消息触发接话',0,10080),kinds:['group']},
   groupMaxRepliesPerHour:{...number('每小时最大发送次数（0 不限制）','群消息触发接话',0,10080),kinds:['group']},
   groupToolsEnabled:bool('群聊专用搜索、记忆与工作区工具','群消息触发接话',['group']),
@@ -64,7 +65,7 @@ function baseline(config,kind){
     imageReceive:config.qqImages,imageSend:config.qqImages,forwardReceive:config.qqForward,forwardSend:config.qqForward,
     fileReceive:config.qqFiles,fileSend:config.qqFiles,voiceReceive:config.qqVoiceReceive,voiceSend:group?false:config.qqVoiceSend,
     stickerLearn:config.knowledgeEnabled,stickerSend:config.knowledgeEnabled,stickerCollect:false,slangLearn:config.knowledgeEnabled,
-    proactiveEnabled:config[prefix+'Enabled'],proactiveMinMinutes:config[prefix+'MinMinutes'],proactiveMaxMinutes:config[prefix+'MaxMinutes'],proactiveMaxPerDay:config[prefix+'MaxPerDay'],
+    proactiveEnabled:config[prefix+'Enabled'],proactiveMinSeconds:config[prefix+'MinSeconds'],proactiveMaxSeconds:config[prefix+'MaxSeconds'],proactiveMaxPerDay:config[prefix+'MaxPerDay'],
   };
   return Object.fromEntries(Object.keys(fieldsFor(kind)).map(key=>[key,key in result?result[key]:config[key]]));
 }
@@ -77,6 +78,7 @@ export function policyRevision(config){
   return createHash('sha256').update(JSON.stringify([baseline(config,'private'),baseline(config,'group'),config.chatPolicy??{}])).digest('hex');
 }
 function patch(value,kind){
+  value=migrateIntervals(value);
   if(!value||typeof value!=='object'||Array.isArray(value))throw Error('聊天设置必须是对象');
   const fields=fieldsFor(kind),out={};
   for(const [key,v] of Object.entries(value)){
@@ -104,7 +106,7 @@ export function validateChatPolicy(value,config){
   for(const scope of ['private','group',...Object.keys(out.overrides)]){
     const p=policyView({...config,chatPolicy:out},scope).effective;
     if(p.bubbleMaxSeconds<p.bubbleMinSeconds)throw Error('气泡最长间隔不能小于最短间隔');
-    if(p.proactiveMaxMinutes<p.proactiveMinMinutes)throw Error('主动搭话最长间隔不能小于最短间隔');
+    if(p.proactiveMaxSeconds<p.proactiveMinSeconds)throw Error('主动搭话最长间隔不能小于最短间隔');
   }
   return out;
 }
@@ -120,7 +122,7 @@ export function resolveChatConfig(config,route){
     groupVoiceSend:group&&p.voiceSend,stickerLearn:p.stickerLearn,stickerSend:p.stickerSend,stickerCollect:p.stickerCollect,
     slangLearn:group&&p.slangLearn,knowledgeEnabled:p.stickerLearn||p.stickerSend||(group&&p.slangLearn),
     [group?'groupProactiveEnabled':'recallEnabled']:p.proactiveEnabled,
-    [group?'groupProactiveMinMinutes':'recallMinMinutes']:p.proactiveMinMinutes,
-    [group?'groupProactiveMaxMinutes':'recallMaxMinutes']:p.proactiveMaxMinutes,
+    [group?'groupProactiveMinSeconds':'recallMinSeconds']:p.proactiveMinSeconds,
+    [group?'groupProactiveMaxSeconds':'recallMaxSeconds']:p.proactiveMaxSeconds,
     [group?'groupProactiveMaxPerDay':'recallMaxPerDay']:p.proactiveMaxPerDay};
 }

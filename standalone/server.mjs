@@ -21,6 +21,7 @@ import {syncNapcat} from './lib/napcat-sync.mjs';
 import {QQControl} from './lib/qq-control.mjs';
 import {SystemLog} from './lib/system-log.mjs';
 import {DiagnosticLogs,redactLog} from './lib/diagnostic-logs.mjs';
+import {wakeSeconds} from './lib/timing.mjs';
 import {recoverMemoryReset,resetMemories} from './lib/reset-memory.mjs';
 import {VoiceProfiles} from './lib/voice-profiles.mjs';
 
@@ -214,7 +215,7 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         checkKey(input.key,true);
         if(bridge.outbox?.has(input.key)||bridge.ambient?.has(input.key))throw Error('此聊天仍有待处理消息，请稍后操作');
         if(!policyView(config,input.key).effective.wakeEnabled)throw Error('请先保存启用潜水与唤醒');
-        json(res,200,bridge.inbox(input.key).setWake(input.mode,input.minutes));
+        json(res,200,bridge.inbox(input.key).setWake(input.mode,wakeSeconds(input)));
       }else if(url.pathname==='/api/chat-policy'){
         idleConfig();checkPolicyScope(input.scope);
         if(input.revision!==policyRevision(config))throw Error('聊天设置已变化，请重新加载后保存');

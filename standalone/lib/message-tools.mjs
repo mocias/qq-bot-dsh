@@ -1,6 +1,7 @@
+import {wakeSeconds} from './timing.mjs';
 export const MESSAGE_GUIDE=`聊天工具（只作用于当前聊天）：
 qq_get_recent_messages {limit:20,offset:0}；qq_get_unread_messages {limit:20,afterSeq:0}；qq_get_my_recent_messages {limit:10}；qq_get_message_detail {messageId:"真实QQ消息ID"} 或 {seq:本地序号}。
-qq_mark_read {throughSeq:已展示的本地序号}；qq_social_state {}；qq_set_wake_config {mode:"active"或"diving",minutes:30}（须启用潜水）。
+qq_mark_read {throughSeq:已展示的本地序号}；qq_social_state {}；qq_set_wake_config {mode:"active"或"diving",seconds:1800}（须启用潜水）。
 qq_send_message {messages:"文字"或["第一条","第二条"],replyToMessageId:"可选真实消息ID",atUserId:"可选群成员QQ"}；qq_reply {message:"文字",replyToMessageId:"真实消息ID"}；qq_send_poke {targetUserId:"群内目标QQ，私聊省略"}。
 发送工具仅加入待发送列表，回合成功后由宿主统一投递；返回 queued 不代表已经发出。使用发送工具后所有 reply 留空，避免重复。不要重复提交同一发送动作。引用较早消息或切换回答对象时使用引用；接续明确的最新消息不必引用。QQ 消息ID与本地 seq 不可混用。
 不同话题请拆成独立气泡：用 messages 数组发送同一对象的多条消息；分别回应不同成员时，分别调用 qq_send_message，各自填写 atUserId，或省略它以不 @ 任何人。宿主会随机间隔发送，不要自己等待，也不要把不同话题重新拼成一个长 reply。每轮最多8个气泡，不要求每条群消息都回应。
@@ -23,7 +24,7 @@ export class MessageTools {
     const fields={
       qq_get_recent_messages:['limit','offset'],qq_get_unread_messages:['limit','afterSeq'],
       qq_get_my_recent_messages:['limit','offset'],qq_get_message_detail:['messageId','seq'],
-      qq_mark_read:['throughSeq'],qq_social_state:[],qq_set_wake_config:['mode','minutes'],
+      qq_mark_read:['throughSeq'],qq_social_state:[],qq_set_wake_config:['mode','seconds','minutes'],
       qq_send_message:['messages','replyToMessageId','atUserId'],qq_reply:['message','replyToMessageId'],
       qq_send_poke:['targetUserId'],
     };
@@ -33,7 +34,7 @@ export class MessageTools {
     if(tool==='qq_set_wake_config'){
       if(!this.config.wakeEnabled)throw Error('潜水与唤醒未启用');
       if(this.inbox.read().messages.some(m=>!m.outgoing&&m.seq>(this.route.inboxSeq??0)))throw Error('有更新的消息到达，请先处理；不能覆盖新消息的唤醒');
-      return this.inbox.setWake(args.mode,args.minutes);
+      return this.inbox.setWake(args.mode,wakeSeconds(args));
     }
     if(tool==='qq_mark_read')return this.inbox.mark(args.throughSeq,this.exposed);
     if(tool==='qq_get_message_detail'){

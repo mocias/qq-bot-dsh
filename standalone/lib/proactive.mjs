@@ -16,8 +16,8 @@ export class Proactive {
   constructor(runtime,{now=Date.now,random=Math.random}={}){this.file=path.join(runtime,'proactive.private.json');this.now=now;this.random=random;}
   policy(config,group){
     return {enabled:group?config.groupProactiveEnabled:config.recallEnabled,
-      intervalMinMinutes:group?config.groupProactiveMinMinutes:config.recallMinMinutes,
-      intervalMaxMinutes:group?config.groupProactiveMaxMinutes:config.recallMaxMinutes,
+      intervalMinMinutes:(group?config.groupProactiveMinSeconds:config.recallMinSeconds)/60,
+      intervalMaxMinutes:(group?config.groupProactiveMaxSeconds:config.recallMaxSeconds)/60,
       maxPerDay:group?config.groupProactiveMaxPerDay:config.recallMaxPerDay,
       timeZone:'Asia/Shanghai',activeHours:{start:config.proactiveStart,end:config.proactiveEnd}};
   }

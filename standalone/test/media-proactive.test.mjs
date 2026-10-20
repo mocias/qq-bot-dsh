@@ -82,7 +82,7 @@ test('original recall scheduler persists reservations, caps daily attempts and w
   const store=new MemoryStore(root,key);
   store.commit([{action:'write',page:'user/tea.md',text:'# 茶\n喜欢红茶',reason:'用户要求',evidence:['m']}],{id:'m',evidenceIds:['m'],summary:'喜欢红茶'});
   const session={id:'s',route,lastUserAt:now,blocked:false};initializeLife(session,now);
-  const config={...defaults,recallEnabled:true,recallMinMinutes:1,recallMaxMinutes:1,recallMaxPerDay:1};
+  const config={...defaults,recallEnabled:true,recallMinSeconds:60,recallMaxSeconds:60,recallMaxPerDay:1};
   const scheduler=new Proactive(root,{now:()=>now,random:()=>0});
   const opts={activeKey:key,call:async()=>{}};
   assert.equal(await scheduler.candidate(session,config,store,opts),null);
@@ -94,7 +94,7 @@ test('original recall scheduler persists reservations, caps daily attempts and w
 test('group scheduled contact needs recent genuine group activity and silence when stale',async t=>{
   const root=temp(t);let now=Date.parse('2026-10-20T02:00:00Z');
   const group={...route,key:'123456/group/345678',group:true,id:'345678'},session={id:'g',route:group,lastUserAt:now,blocked:false};initializeLife(session,now);
-  const config={...defaults,groupProactiveEnabled:true,groupProactiveMinMinutes:1,groupProactiveMaxMinutes:1};
+  const config={...defaults,groupProactiveEnabled:true,groupProactiveMinSeconds:60,groupProactiveMaxSeconds:60};
   const p=new Proactive(root,{now:()=>now}),store=new MemoryStore(root,group.key);
   let age=100;const opts={call:async()=>({messages:[{user_id:234567,time:now/1000-age,message:[{type:'text',data:{text:'真实话题'}}]}]})};
   assert.equal(await p.candidate(session,config,store,opts),null);now+=60001;
@@ -113,7 +113,7 @@ test('desktop launcher reuses live login, blocks existing QQ and never starts a 
   assert.equal((await service.start({...defaults,qqExecutable:path.join(root,'QQ.exe'),napcatFrameworkDir:root})).action,'launched');assert.equal(launched,1);
 });
 test('migration configuration validates policy and preserves blank private credentials',()=>{
-  assert.throws(()=>validate({recallMinMinutes:60,recallMaxMinutes:10}),/最长/);
+  assert.throws(()=>validate({recallMinSeconds:3600,recallMaxSeconds:600}),/最长/);
   assert.throws(()=>validate({proactiveStart:'25:00'}),/HH:mm/);
   assert.throws(()=>validate({qqMediaRoots:['relative']}),/绝对/);
   assert.equal(validate({qqImages:true,recallEnabled:true}).recallEnabled,true);

@@ -24,7 +24,7 @@ export function observeCompaction(session,event,store,persist,maintenance=false)
 }
 export function due(session,config,now) {
   const life=initializeLife(session,now);
-  if(!config.memoryEnabled||session.blocked||now<life.retryAt||now-life.lastAt<config.memoryIdleMinutes*60000)return null;
+  if(!config.memoryEnabled||session.blocked||now<life.retryAt||now-life.lastAt<config.memoryIdleSeconds*1000)return null;
   if(life.compactions.some(c=>!life.digestedIds.includes(c.id)))return 'digest';
   if(config.rotationEnabled&&life.compactions.length>=config.rotateAfterCompactions&&life.receipt&&life.digestVersion===life.version)return 'rotate';
   return null;
@@ -59,7 +59,7 @@ export async function maintain({session,config,store,dsh,persist,now,isCurrent,s
     life.digestedIds.push(...compactions.map(x=>x.id));life.conversation=[];
     life.digestVersion=version;life.receipt=id;life.retryAt=0;
   }catch(error){
-    life.retryAt=now()+config.memoryIdleMinutes*60000;
+    life.retryAt=now()+config.memoryIdleSeconds*1000;
     if(!modelCompleted&&!error.acknowledged)session.blocked=true;
     if(!error.cancelled)throw error;
   }finally{life.pending=null;persist();}

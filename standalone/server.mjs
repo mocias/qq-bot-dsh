@@ -17,6 +17,7 @@ import {sniffImageMediaType} from '../dsh-group-social/lib/images.mjs';
 import {publicSearch} from './lib/chat-tools.mjs';
 import { DesktopQQ } from './lib/desktop-qq.mjs';
 import {policyView,policyRevision,resolveChatConfig} from './lib/chat-policy.mjs';
+import {syncNapcat} from './lib/napcat-sync.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export function createApp({ root = path.dirname(here), runtime = path.join(here,'.runtime'), voice: injectedVoice, bridge: injectedBridge } = {}) {
@@ -24,6 +25,11 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
   let config=validate(readJson(configFile, defaults));
   const voice=injectedVoice || new VoiceService(root,runtime), bridge=injectedBridge || new Bridge(runtime,{voice});
   const desktop=new DesktopQQ(runtime),management=new Management(runtime);
+  let napcatSyncBusy=false;
+  async function syncInterface(){
+    idleConfig();napcatSyncBusy=true;
+    try{return await syncNapcat(config,runtime);}finally{napcatSyncBusy=false;}
+  }
   function keys(){
     const values=new Set(),dir=path.join(runtime,'memories');
     if(fs.existsSync(dir))for(const e of fs.readdirSync(dir,{withFileTypes:true}))if(e.isDirectory()&&!e.isSymbolicLink()&&/^[a-f0-9]{64}$/.test(e.name)){const meta=readJson(path.join(dir,e.name,'.runtime','store.json'),null);if(meta?.key)values.add(meta.key);}
@@ -42,6 +48,7 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
   }
   function checkPolicyScope(scope){if(!policyScopes().includes(scope))throw Error('请先在连接页配置机器人账号和允许的好友或群');}
   function idleConfig(){
+    if(napcatSyncBusy)throw Error('正在同步 NapCat 接口，请稍候');
     if(bridge.status.state!=='stopped'||bridge.status.active||voice.busy)throw Error('请先停止 QQ 连接并等待语音及消息任务完成，再修改配置');
   }
   function audioInput(input,max=12*1024*1024){
@@ -144,7 +151,12 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         const voiceFields=['voice','model','voiceProvider','mimoApiKey','mimoTtsMode','mimoVoice','mimoReferenceId','mimoStyle','mimoAsrLanguage','clearMimoApiKey'];
         const patch=url.pathname==='/api/voice/config'?Object.fromEntries(Object.entries(input).filter(([key])=>voiceFields.includes(key))):input;
         const next=validate(patch,config); voice.checkConfig?.(next);
-        writeJson(configFile,next); config=next; json(res,200,{config:publicConfig(config)});
+        writeJson(configFile,next); config=next;
+        let napcatSync;
+        if(url.pathname==='/api/config'&&['botQQ','qqUrl','qqToken','clearQqToken','napcatFrameworkDir'].some(k=>Object.hasOwn(input,k))){
+          try{napcatSync=await syncInterface();}catch(error){napcatSync={state:'pending',message:'面板已保存，但接口未同步：'+error.message};}
+        }
+        json(res,200,{config:publicConfig(config),napcatSync});
       } else if(url.pathname==='/api/voice/references'){
         json(res,200,{reference:voice.uploadReference(audioInput(input),input.name)});
       } else if (url.pathname==='/api/voice/synthesize') json(res,200,await voice.synthesize(input.text,config));
@@ -155,12 +167,13 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         try { const presets=await dsh.probe(); json(res,200,{ok:true,presets}); } finally { dsh.close(); }
       } else if(url.pathname==='/api/qq/probe') json(res,200,await probeQQ(config));
       else if(url.pathname==='/api/qq/desktop-check') json(res,200,await desktop.inspect(config));
-      else if(url.pathname==='/api/qq/desktop-start') json(res,200,await desktop.start(config));
+      else if(url.pathname==='/api/qq/sync') json(res,200,await syncInterface());
+      else if(url.pathname==='/api/qq/desktop-start') { await syncInterface();json(res,200,await desktop.start(config)); }
       else if(url.pathname==='/api/session/new'){
         if(typeof input.key!=='string'||!/^\d{5,20}\/(?:private|group)\/\d{5,20}$/.test(input.key))throw Error('请选择一个现有聊天');
         json(res,200,await bridge.newConversation(input.key));
       }
-      else if (url.pathname==='/api/bridge/start') { await bridge.start(config); json(res,200,bridge.status); }
+      else if (url.pathname==='/api/bridge/start') { await syncInterface();await bridge.start(config); json(res,200,bridge.status); }
       else if (url.pathname==='/api/bridge/stop') { bridge.stop(); json(res,200,bridge.status); }
       else json(res,404,{error:'接口不存在'});
     } catch(error) { json(res,400,{error:error instanceof SyntaxError ? '数据格式不正确' : error.message}); }

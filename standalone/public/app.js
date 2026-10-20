@@ -161,7 +161,7 @@ for(const tab of document.querySelectorAll('[data-tab]'))tab.addEventListener('c
 for(const formId of ['config-form'])$(formId).addEventListener('submit',event=>{
   event.preventDefault();const selected=fields.filter(field=>event.currentTarget.contains($(field))),data={};
   for(const field of selected)data[field]=switches.includes(field)?$(field).checked:numbers.includes(field)?Number($(field).value):field==='qqMediaRoots'?$(field).value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean):['privateUsers','groups','adminUsers'].includes(field)?$(field).value.split(/[\s,，]+/).filter(Boolean):$(field).value;
-  action(event.submitter,async()=>{const result=await request('/api/config',data);fill(result.config,selected);notice(formId==='config-form'?'连接配置已保存。':'会话与聊天设置已保存。');});
+  action(event.submitter,async()=>{const result=await request('/api/config',data);fill(result.config,selected);notice('连接配置已保存。'+(result.napcatSync?.message??''),result.napcatSync?.state==='pending');});
 });
 $('synthesize').addEventListener('click',()=>action($('synthesize'),async()=>{const result=await request('/api/voice/synthesize',{text:$('speech-text').value});generatedUrl=result.audioUrl;$('audio-player').src=generatedUrl;$('audio-result').hidden=false;notice('语音已生成，可以试听或继续识别。');}));
 async function recognize(buffer){$('voice-progress').textContent='正在使用已保存的服务识别，请稍候…';try{const bytes=new Uint8Array(buffer);let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));const result=await request('/api/voice/transcribe',{audio:btoa(binary)});$('transcript').value=result.text;notice(`识别完成 · ${result.model} 模型 · ${Number.isFinite(result.duration)?result.duration.toFixed(1)+' 秒音频':'识别完成'}`);}finally{$('voice-progress').textContent='使用已保存的语音服务';}}
@@ -174,6 +174,7 @@ refresh().catch(error=>notice(error.message,true));setInterval(()=>refresh().cat
 
 $('qq-probe').addEventListener('click',()=>action($('qq-probe'),async()=>{const result=await request('/api/qq/probe',{});notice('QQ '+result.account+' 在线，登录账号验证通过。');}));
 $('desktop-check').addEventListener('click',()=>action($('desktop-check'),async()=>{const result=await request('/api/qq/desktop-check',{});notice(result.message);}));
+$('desktop-sync').addEventListener('click',()=>action($('desktop-sync'),async()=>{const result=await request('/api/qq/sync',{});notice(result.message,result.state==='pending');}));
 $('desktop-start').addEventListener('click',()=>action($('desktop-start'),async()=>{const result=await request('/api/qq/desktop-start',{});notice(result.message);}));
 $('new-conversation').addEventListener('click',()=>action($('new-conversation'),async()=>{
  const {key}=managedInput();await request('/api/session/new',{key});await reloadManaged();notice('已开启新会话，沿用同一工作区和记忆库。');

@@ -12,7 +12,9 @@
 
 `QQ / NapCat OneBot v11 → standalone Node 服务 → DSH Web API → DSH Agent / 模型`
 
-`standalone/` 是独立进程，不安装为 DSH 插件；DSH 仍必须另行运行。协议参考 qq-bridge 的 `a56164e70a0521a7829138a42eee76066fde2b8b` 版本，没有引入其完整业务运行时。当前 standalone 版本为 0.7.0。
+`standalone/` 是独立进程，不安装为 DSH 插件；DSH 仍必须另行运行。协议参考 qq-bridge 的 `a56164e70a0521a7829138a42eee76066fde2b8b` 版本，没有引入其完整业务运行时。当前 standalone 版本为 0.7.1。
+
+0.7.1 修复面板与 NapCat 账号接口配置脱节：`napcat-sync.mjs` 以面板为准，同步指定账号的本机 WebSocket，支持已登录同账号的管理 API 在线应用；失败明确提示，绝不自动切号/重启。写入前保留私有备份。已在本机将缺失接口的账号配置对齐，真实 `get_login_info/get_status` 返回账号匹配且在线；没有发送 QQ 消息或启用自动回复。
 
 关键入口：
 

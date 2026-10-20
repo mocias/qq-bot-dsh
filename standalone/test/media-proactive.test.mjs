@@ -129,7 +129,7 @@ test('real bridge media path attaches pixels and sends image exactly once even o
   const root=temp(t);let prompts=0,sends=0;
   const b=new Bridge(root,{media:new Media(root,{call:async()=>({url:'https://images.example.org/a'}),download:async()=>png,voice:{}})});
   b.config={...defaults,privatePreset:'chat',privateUsers:['234567']};b.status.state='running';
-  b.dsh={createSession:async()=> 's',prompt:async(_id,text,options)=>{
+  b.dsh={rename:async()=>{},createSession:async()=> 's',prompt:async(_id,text,options)=>{
     prompts++;assert.equal(options.images[0].mediaType,'image/png');assert.match(text,/图片已附加/);
     return JSON.stringify({reply:'这张图',memory:[],qq:{images:['https://images.example.org/a']}});
   }};
@@ -144,7 +144,7 @@ test('new user input cancels proactive work, preserves memory and suppresses the
   b.config={...defaults,privatePreset:'chat',privateUsers:['234567']};b.status.state='running';b.state.lastActiveKey=key;
   const session={id:'s',route,workspace:root,preset:'chat',blocked:false,lastUserAt:Date.now()};initializeLife(session);b.state.sessions[b.scope(route)]=session;
   b.dsh={
-    createSession:async()=> 'new',
+    createSession:async()=> 'new',rename:async()=>{},
     canSteer:()=>true,
     prompt:async(_id,text,opts)=>{
       if(text.includes('这轮由主动搭话调度触发'))return new Promise((_resolve,reject)=>{
@@ -166,7 +166,7 @@ test('new user input cancels proactive work, preserves memory and suppresses the
 test('unsolicited memory proposals do not suppress normal or proactive replies and never write pages',async t=>{
   const root=temp(t),sent=[],b=new Bridge(root);
   b.config={...defaults,privatePreset:'chat'};b.status.state='running';
-  b.dsh={createSession:async()=> 's',prompt:async()=>JSON.stringify({reply:'你好呀',memory:[{action:'write',page:'user/unsolicited.md',text:'# 不应保存',reason:'猜测',evidence:[route.messageId]}]})};
+  b.dsh={rename:async()=>{},createSession:async()=> 's',prompt:async()=>JSON.stringify({reply:'你好呀',memory:[{action:'write',page:'user/unsolicited.md',text:'# 不应保存',reason:'猜测',evidence:[route.messageId]}]})};
   b.socket={send(bytes){const frame=JSON.parse(bytes);sent.push(frame);queueMicrotask(()=>{b.pending.get(frame.echo)?.({status:'ok',retcode:0,data:{message_id:sent.length}});b.pending.delete(frame.echo);});}};
   await b.handle(route,b.generation);
   const session=b.state.sessions[b.scope(route)];

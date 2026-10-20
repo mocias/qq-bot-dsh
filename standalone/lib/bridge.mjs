@@ -48,6 +48,7 @@ export class Bridge {
     this.epochs=new Map();this.ambient=new Map();this.state.ambientAttempts??={};this.ambientAttempts=this.state.ambientAttempts;this.management=new Management(runtime);
     this.now=now;this.jobs=new Map();this.maintenance=new Map();this.memories=new Map();
     this.state.retired??=[];this.state.rotations??={};
+    this.state.sessionNaming??={counters:{},names:{}};
     this.state.groupSendTimes??={};this.state.reminders??=[];
     this.reminders=new ReminderRelay({reserve:(id,session)=>{const token=(session.backend??this.config.dshUrl)+'/'+id;if(this.state.reminders.includes(token))return false;this.state.reminders.push(token);this.state.reminders=this.state.reminders.slice(-10000);this.persist();return true;},deliver:(session,text,id)=>this.deliverReminder(session,text,id),onError:error=>{this.reportError(error.message);}});
     this.media=media??new Media(runtime,{call:(...args)=>this.call(...args),voice:voice??new VoiceService(path.resolve(runtime,'../..'),runtime),now});
@@ -69,10 +70,27 @@ export class Bridge {
   configFor(route){const config=this.voiceProfiles.resolve(resolveChatConfig(this.config,route),route.key);return {...config,memoryContextActive:!config.memoryActiveOnly||this.state.lastActiveKey===route.key};}
   scope(route){const config=this.configFor(route),preset=route.group?config.groupPreset:config.privatePreset;return createHash('sha256').update(config.dshUrl+'|'+preset+'|'+route.key+(this.state.memoryEpochs?.[route.key]?'|'+this.state.memoryEpochs[route.key]:'')).digest('hex');}
   reportError(message){this.status.lastError=message;this.systemLog?.record('bridge.error',{component:'qq',level:'error'});}
-  summary(){return Object.values(this.state.sessions).filter(s=>s.route).map(s=>({key:s.route.key,sessionId:s.id,blocked:s.blocked,
+  summary(){return Object.values(this.state.sessions).filter(s=>s.route).map(s=>({key:s.route.key,sessionId:s.id,title:s.title,blocked:s.blocked,
     compactions:s.life?.compactions.length??0,pendingCompactions:s.life?.compactions.filter(c=>!s.life.digestedIds.includes(c.id)).length??0,
     lastDigest:this.memory(s.route.key).state.lastDigest||null,maintenance:this.maintenance.has(s.route.key),lastActivity:s.life?.lastAt}));}
   persist() { this.state.seen = this.state.seen.slice(-10000); this.state.deliveries = this.state.deliveries.slice(-200); writeJson(this.file, this.state); }
+  async nameSession(route,id){
+    const naming=this.state.sessionNaming,token=createHash('sha256').update(this.config.dshUrl+'|'+route.key+'|'+id).digest('hex');
+    let entry=naming.names[token];
+    if(!entry){
+      // Seed upgrades from retained history; never rename old sessions or reuse a reserved number.
+      const previous=new Set([...Object.values(this.state.sessions),...this.state.retired]
+        .filter(s=>s.route?.key===route.key&&s.id!==id).map(s=>(s.backend??this.config.dshUrl)+'|'+s.id));
+      const number=Math.max(naming.counters[route.key]??0,previous.size)+1;
+      const date=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(this.now());
+      entry={number,title:`${date}-${route.group?'群聊':'私聊'}-${route.id}-${number}`};
+      naming.counters[route.key]=number;naming.names[token]=entry;
+    }
+    // Persist before RPC so a retry, midnight or process restart keeps the same title.
+    this.persist();
+    await this.dsh.rename(id,entry.title);
+    return {...entry};
+  }
   async start(config) {
     this.systemLog?.record('bridge.start.requested',{component:'qq'});
     if (this.status.state !== 'stopped') throw Error('请先停止当前连接');
@@ -180,9 +198,12 @@ export class Bridge {
     if (!session || session.blocked) {
       const dir = path.join(this.runtime, 'workspaces', scope); fs.mkdirSync(dir, { recursive: true });
       if(session)this.state.retired.push({...session,reason:'interrupted',retiredAt:this.now()});
-      session = { id: await dsh.createSession(dir, preset), blocked: false,route:{key:route.key,id:route.id,group:route.group},workspace:dir,preset,backend:config.dshUrl };
+      session = { id: await dsh.createSession(dir, preset), namingPending:true,blocked: false,route:{key:route.key,id:route.id,group:route.group},workspace:dir,preset,backend:config.dshUrl };
       initializeLife(session,this.now());noteArrival(session,this.now());
       this.state.sessions[scope] = session; this.persist();
+    }
+    if(session.namingPending){
+      Object.assign(session,await this.nameSession(route,session.id));delete session.namingPending;this.persist();
     }
     // Upgrade v1 sessions lazily, retaining their existing workspace and id.
     session.route??={key:route.key,id:route.id,group:route.group};session.workspace??=path.join(this.runtime,'workspaces',scope);session.preset??=preset;
@@ -291,7 +312,7 @@ export class Bridge {
     let reply;
     try{
       if(name==='help')reply='/help 帮助 · /status 状态 · /id 标识 · /ver 版本 · /stop 停止并丢弃待处理消息 · /new 新会话 · /steer 内容 插话 · /session 历史列表 · /workspace 当前工作区 · /preset 当前预设 · /memory 记忆概览 · /doctor 本聊天检查。模型、权限和预设切换请在本机 DSH 配置。';
-      else if(name==='ver')reply='QQ 独立服务 0.10.0';
+      else if(name==='ver')reply='QQ 独立服务 0.11.0';
       else if(name==='stop'){
         this.epochs.set(route.key,(this.epochs.get(route.key)??0)+1);
         const ambient=this.ambient.get(route.key);if(ambient){clearTimeout(ambient.timer);this.ambient.delete(route.key);}
@@ -302,7 +323,7 @@ export class Bridge {
         const job=this.jobs.get(route.key);if(!arg||!job||job.toolsActive||job.background||!this.dsh.canSteer?.(job.session.id))throw Error('当前没有可插话的普通回合');
         const input={...route,text:arg,requestText:arg};if(config.memoryEnabled)this.memory(route.key).record({id:route.messageId,kind:'qq-input',sender:route.sender,text:arg});
         await this.insert(input,job,generation);reply='补充内容已提交。';
-      }else if(name==='session')reply=[...Object.values(this.state.sessions),...this.state.retired].filter(s=>s.route?.key===route.key&&(!s.backend||s.backend===config.dshUrl)).map(s=>s.id+(s===session?'（当前）':'（历史保留）')).join('\n')||'尚无会话';
+      }else if(name==='session')reply=[...Object.values(this.state.sessions),...this.state.retired].filter(s=>s.route?.key===route.key&&(!s.backend||s.backend===config.dshUrl)).map(s=>(s.title?s.title+' · ':'')+s.id+(s===session?'（当前）':'（历史保留）')).join('\n')||'尚无会话';
       else if(['status','id','workspace','preset','doctor','memory'].includes(name)){
         if(arg)throw Error('本版本此命令只支持查询');
         if(name==='memory')reply='本聊天记忆页面：'+this.memory(route.key).pages().length+'；编辑请在本机面板进行。';
@@ -370,7 +391,7 @@ export class Bridge {
     try{for(const [scope,session] of Object.entries(this.state.sessions)){
       const route=session.route;if(!route||generation!==this.generation)continue;
       const config=this.configFor(route);
-      if(!(route.group?this.config.groups:this.config.privateUsers).includes(route.id)||this.scope(route)!==scope||this.queues.has(route.key)||!due(session,config,this.now()))continue;
+      if(!(route.group?this.config.groups:this.config.privateUsers).includes(route.id)||this.scope(route)!==scope||this.queues.has(route.key)||this.jobs.has(route.key)||this.ambient.has(route.key)||this.backgrounds.has(route.key)||!due(session,config,this.now()))continue;
       const controller=new AbortController(),store=this.memory(route.key);
       const current=()=>generation===this.generation&&this.state.sessions[scope]===session;
       const job={controller};this.maintenance.set(route.key,job);
@@ -390,10 +411,9 @@ export class Bridge {
     if(!journal){journal={oldId:session.id,workspace:session.workspace,receipt,status:'pending',at:this.now()};this.state.rotations[session.id]=journal;this.persist();}
     if(!journal.newId){journal.newId=await this.dsh.createSession(session.workspace,session.preset);this.persist();}
     if(!safe())return;
-    const title='QQ 私聊｜'+new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',dateStyle:'short',timeStyle:'medium'}).format(this.now());
-    await this.dsh.rename(journal.newId,title);
+    const name=await this.nameSession(session.route,journal.newId);
     if(!safe())return;
-    const next={id:journal.newId,blocked:false,route:session.route,workspace:session.workspace,preset:session.preset,backend:this.config.dshUrl,lastUserAt:session.lastUserAt};initializeLife(next,this.now());
+    const next={id:journal.newId,...name,blocked:false,route:session.route,workspace:session.workspace,preset:session.preset,backend:this.config.dshUrl,lastUserAt:session.lastUserAt};initializeLife(next,this.now());
     const retiredLength=this.state.retired.length;
     this.state.retired.push({...session,retiredAt:this.now(),reason:'rotation'});this.state.sessions[scope]=next;journal.status='complete';
     try{this.persist();}catch(error){this.state.sessions[scope]=session;this.state.retired.length=retiredLength;journal.status='pending';throw error;}
@@ -407,9 +427,9 @@ export class Bridge {
       const id=await this.dsh.createSession(session.workspace,session.preset);
       const safe=()=>this.generation===generation&&this.state.sessions[scope]===session&&session.life.version===version&&!session.blocked;
       if(!safe())throw Error('有新消息到达或连接已停止，保留原会话');
-      await this.dsh.rename(id,'QQ 新会话｜'+new Date().toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'}));
+      const name=await this.nameSession(route,id);
       if(!safe())throw Error('有新消息到达或连接已停止，保留原会话');
-      const next={id,blocked:false,route:session.route,workspace:session.workspace,preset:session.preset,lastUserAt:session.lastUserAt};initializeLife(next,this.now());
+      const next={id,...name,blocked:false,route:session.route,workspace:session.workspace,preset:session.preset,backend:this.config.dshUrl,lastUserAt:session.lastUserAt};initializeLife(next,this.now());
       const length=this.state.retired.length;this.state.retired.push({...session,retiredAt:this.now(),reason:'manual-new-conversation'});this.state.sessions[scope]=next;
       try{this.persist();}catch(error){this.state.sessions[scope]=session;this.state.retired.length=length;throw error;}
       return {oldId:session.id,newId:id,key,memoryPreserved:true};

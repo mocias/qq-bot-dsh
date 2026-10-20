@@ -89,6 +89,7 @@ async function mockDsh(t){
     if(body.method==='agentPresets/list')value={presets:[{name:'safe-chat'}]};
     else if(body.method==='workspace/create')value={workspace:{workspaceId:request.path}};
     else if(body.method==='session/create')value={sessionId:'session-'+(++nextSession)};
+    else if(body.method==='session/rename'){assert.match(request.title,/^\d{4}-\d{2}-\d{2}-(私聊|群聊)-\d+-\d+$/);}
     else if(body.method==='session/prompt'){
       assert.equal(request.mode,'queue');assert.ok(request.requestId);assert.equal(request.content[0].type,'text');
       const follower=followers.get(request.sessionId);assert.ok(follower,'follow snapshot must precede prompt');
@@ -131,7 +132,7 @@ test('end-to-end OneBot to DSH: dedup, private/group separation, receipts and sa
 });
 test('in-flight interruption blocks the old DSH session and never sends a late reply',async t=>{
   const runtime=temp();let finish;
-  class SlowDsh{async probe(){}async createSession(){return'old';}prompt(){return new Promise(resolve=>{finish=resolve;});}close(){}}
+  class SlowDsh{async probe(){}async createSession(){return'old';}async rename(){}prompt(){return new Promise(resolve=>{finish=resolve;});}close(){}}
   const bridge=new Bridge(runtime,{Dsh:SlowDsh});bridge.config={...defaults,privatePreset:'test'};bridge.dsh=new SlowDsh();bridge.status.state='running';bridge.generation=1;
   bridge.socket={send(){assert.fail('late reply must not be sent');},close(){}};
   t.after(()=>fs.rmSync(runtime,{recursive:true,force:true}));

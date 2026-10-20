@@ -12,7 +12,9 @@
 
 `QQ / NapCat OneBot v11 → standalone Node 服务 → DSH Web API → DSH Agent / 模型`
 
-`standalone/` 是独立进程，不安装为 DSH 插件；DSH 仍必须另行运行。协议参考 qq-bridge 的 `a56164e70a0521a7829138a42eee76066fde2b8b` 版本，没有引入其完整业务运行时。当前 standalone 版本为 0.10.0。
+`standalone/` 是独立进程，不安装为 DSH 插件；DSH 仍必须另行运行。协议参考 qq-bridge 的 `a56164e70a0521a7829138a42eee76066fde2b8b` 版本，没有引入其完整业务运行时。当前 standalone 版本为 0.11.0。
+
+0.11 为群聊开放自动轮换，沿用空闲、成功压缩、持久化记忆回执与新消息优先条件。所有新建会话统一命名并持久化自然编号，详见 `docs/SESSIONS-0.11.md`。
 
 0.10 新增 MiMo 音色设计（无录音）、命名语音预设库与人设独立语音副本。QQ 语音收发通过聊天配置解析实际选择的语音服务。共享密钥不复制，公共预设更新不影响已保存的人设副本；详见 `docs/VOICE-0.10.md`。
 

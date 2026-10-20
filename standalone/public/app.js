@@ -373,7 +373,7 @@ $('memory-id').onchange=()=>{if($('memory-id').value)$('memory-open').click();};
 function paintLife(status){
  if(!loadedKey)return;
  const sessions=(status.lifecycle??[]).filter(s=>s.key===loadedKey);
- $('lifecycle-status').textContent=sessions.length?sessions.map(s=>'已压缩 '+s.compactions+' 次 · 待整理 '+s.pendingCompactions+' 次'+(s.maintenance?' · 整理中':'')+(s.blocked?' · 旧回合已隔离':'')).join('\n'):'此聊天暂无运行会话；记忆库可独立管理。';
+ $('lifecycle-status').textContent=sessions.length?sessions.map(s=>(s.title?s.title+' · ':'')+'已压缩 '+s.compactions+' 次 · 待整理 '+s.pendingCompactions+' 次'+(s.maintenance?' · 整理中':'')+(s.blocked?' · 旧回合已隔离':'')).join('\n'):'此聊天暂无运行会话；记忆库可独立管理。';
 }
 async function reloadManaged(){
   const key=$('manage-key').value,serial=++manageSerial;loadedKey='';managementData=null;

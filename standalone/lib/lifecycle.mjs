@@ -26,7 +26,7 @@ export function due(session,config,now) {
   const life=initializeLife(session,now);
   if(!config.memoryEnabled||session.blocked||now<life.retryAt||now-life.lastAt<config.memoryIdleMinutes*60000)return null;
   if(life.compactions.some(c=>!life.digestedIds.includes(c.id)))return 'digest';
-  if(config.rotationEnabled&&!session.route.group&&life.compactions.length>=config.rotateAfterCompactions&&life.receipt&&life.digestVersion===life.version)return 'rotate';
+  if(config.rotationEnabled&&life.compactions.length>=config.rotateAfterCompactions&&life.receipt&&life.digestVersion===life.version)return 'rotate';
   return null;
 }
 export async function maintain({session,config,store,dsh,persist,now,isCurrent,signal,rotate}) {

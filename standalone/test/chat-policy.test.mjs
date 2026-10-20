@@ -34,11 +34,20 @@ test('legacy settings inherit without changing group voice defaults; overrides i
 });
 test('policy rejects unknown settings, wrong domains and invalid merged interval ranges',()=>{
   for(const chatPolicy of [
-    {private:{mimoApiKey:'bad'}},{private:{groupAmbientEnabled:true}},{group:{rotationEnabled:true}},
+    {private:{mimoApiKey:'bad'}},{private:{groupAmbientEnabled:true}},{group:{rotationEnabled:'true'}},
     {private:{imageSend:'false'}},{private:{adminUsers:['../bad']}},{overrides:{'../bad':{}}},
     {private:{proactiveMinMinutes:150},overrides:{[privateKey]:{proactiveMaxMinutes:100}}},
   ])assert.throws(()=>validate({chatPolicy},config()));
   assert.throws(()=>validate({chatPolicy:JSON.parse('{"private":{"__proto__":{}}}')},config()));
+});
+test('group rotation settings inherit defaults and accept per-group overrides independently of private chats',()=>{
+  const c=validate({chatPolicy:{group:{rotationEnabled:true,rotateAfterCompactions:3},overrides:{[groupKey]:{rotationEnabled:false,rotateAfterCompactions:2}}}},config());
+  assert.equal(policyView(c,'group').effective.rotateAfterCompactions,3);
+  assert.equal(resolveChatConfig(c,groupKey).rotationEnabled,false);
+  assert.equal(resolveChatConfig(c,groupKey).rotateAfterCompactions,2);
+  assert.equal(resolveChatConfig(c,privateKey).rotateAfterCompactions,15);
+  assert.equal(resolveChatConfig(c,`${bot}/group/100000005`).rotationEnabled,true);
+  assert.throws(()=>validate({chatPolicy:{group:{rotateAfterCompactions:0}}},config()));
 });
 test('incoming route uses private/group/recipient permissions while keeping allowlists',()=>{
   const c=validate({chatPolicy:{private:{imageReceive:false},group:{groupAmbientEnabled:true},overrides:{[privateKey]:{voiceReceive:false}}}},config());
@@ -73,7 +82,7 @@ test('bridge uses recipient preset, memory switch and reminder subscriptions wit
   const root=temp(t),bridge=new Bridge(root);t.after(()=>bridge.stop());
   bridge.config=validate({chatPolicy:{private:{remindersEnabled:false},overrides:{[privateKey]:{preset:'specific',memoryEnabled:false,remindersEnabled:true}}}},config());
   bridge.status.state='running';bridge.status.account=bot;bridge.generation=1;
-  let presetSeen,promptSeen;bridge.dsh={createSession:async(dir,preset)=>{presetSeen=preset;return 'specific-session';},prompt:async(id,prompt,options)=>{
+  let presetSeen,promptSeen;bridge.dsh={rename:async()=>{},createSession:async(dir,preset)=>{presetSeen=preset;return 'specific-session';},prompt:async(id,prompt,options)=>{
     promptSeen=prompt;
     options.onEvent({type:'compaction/summary',seq:1,data:{compactionId:'disabled',summary:[{type:'text',text:'should not persist'}]}});
     options.onEvent({type:'compaction/end',seq:2,data:{compactionId:'disabled'}});

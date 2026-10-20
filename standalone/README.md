@@ -1,4 +1,4 @@
-# QQ RSI 独立服务 · 0.3
+# QQ RSI 独立服务 · 0.4
 
 这是单独运行的 Node 服务，不需要作为 DSH 插件安装。QQ 接入、配置面板和语音测试在本进程内运行；对话推理、工具循环和权限审批仍依赖另行启动的 DSH。
 
@@ -15,7 +15,7 @@
 - 独立 Web 配置面板；本机访问校验、登录 Cookie、跨站写请求拦截、密钥不回显。
 - Windows System.Speech 文字合成；复用 `dsh-companion-voice/lib/tts.ps1`。
 - 复用部署目录已有的 faster-whisper Python 环境和 base/small 模型；默认 small。上传 WAV，或识别刚生成的语音，完全在本机处理。
-- OneBot v11 正向 WebSocket 文字入口；私聊/群聊允许名单，群聊需 @机器人，忽略自己的消息。
+- OneBot v11 正向 WebSocket 文字与多媒体入口；私聊/群聊允许名单，群聊需 @机器人，忽略自己的消息。
 - 通过 DSH Web API 创建会话、提交消息、订阅回复；私聊与群聊使用不同的预设、工作区和会话。
 - 持久化消息去重、同一会话串行处理、最多 20 条待处理消息、停止后的迟到回复拦截。发送结果不确定时不会盲目重试；中断会话隔离后再接收新消息。
 - 长期记忆：复用旧插件的 Markdown 目录和启动资料，按机器人账号＋私聊/群聊＋对方号码隔离。每次投递包含当前记忆和相关页面。用户明确要求记住、修正、忘记时，通过模型返回的结构化更新写入；群聊允许有本轮来源证据的稳定事实增量更新。页路径和证据由宿主验证。
@@ -47,7 +47,7 @@
 
 `npm --prefix standalone test` 执行本地 HTTP/WebSocket 模拟集成测试；不会向真实 QQ 发消息。`node standalone/scripts/voice-smoke.mjs` 使用现有模型实际生成并识别测试语音，报告位于 `.runtime/voice-smoke/report.json`。
 
-这不是脱离 DSH 的独立 Agent harness。旧插件和数据保留原位，没有修改其启动配置。旧插件的专用人设管理界面、QQ 图片/合并转发/语音收发和旧定时任务投递尚未迁入。当前 QQ 桥接只收发文字，回复最多 4000 字。不要同时让旧插件和独立服务接管同一个 QQ 聊天。
+这不是脱离 DSH 的独立 Agent harness。旧插件和数据保留原位，没有修改其启动配置。本版已迁入 QQ 图片、合并转发、语音收发、私聊主动回忆和群聊定时参与。文字回复最多 4000 字；原插件专用人设管理和通用定时任务编辑器仍未迁入。不要同时让旧插件和独立服务接管同一个 QQ 聊天。
 
 压缩计数来自本服务订阅到的真实 DSH `compaction/summary`＋成功 `compaction/end`，不根据消息长度猜测。当前服务拥有的 DSH 会话应仅由此服务驱动；在其他客户端对其压缩/提交消息，或在服务离线时继续使用它，不属于本版自动计数与轮换的保证范围。
 
@@ -60,6 +60,10 @@ DSH 协议参考 [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge) �
 
 ## 原记忆核心
 
-九个原记忆模块和技能正文保存在 `lib/legacy-memory/` 与 `lib/skills/memory.md`，来源校验见 `provenance.json`。原 CLI `scripts/original-memory.mjs` 仅调整导入路径，可使用 MEMORY_DIR 指定测试库。Cordis 事件、旧人设界面、原自动 git 提交与主动回忆推送尚未原样迁入。
+九个原记忆模块和技能正文保存在 `lib/legacy-memory/` 与 `lib/skills/memory.md`，来源校验见 `provenance.json`。原 CLI `scripts/original-memory.mjs` 仅调整导入路径，可使用 MEMORY_DIR 指定测试库。主动回忆复用原 RecallSchedule 和 buildRecallNudgeMessage；引子改用当前有效记忆页面标题，避免重新唤起已忘记的历史日志。Cordis 事件、旧人设界面和原自动 git 提交尚未原样迁入。
 
 桌面 QQ 共存方式、验证限制及下一步见根目录 `HANDOFF.md` 和 `docs/MIGRATION.md`。
+
+## QQ 多媒体与主动消息
+
+0.4 的功能、默认值、消息格式、桌面启动和验证边界见 [QQ 功能说明](../docs/QQ-FEATURES.md)。主动消息默认关闭，不会在升级后自动发言。

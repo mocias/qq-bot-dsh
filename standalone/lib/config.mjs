@@ -9,6 +9,13 @@ export const defaults = {
   voice: 'Microsoft Huihui Desktop', model: 'small',
   memoryEnabled: true, memoryIdleMinutes: 30, rotateAfterCompactions: 15,
   rotationEnabled: true, privateMessagePolicy: 'steer', groupMessagePolicy: 'queue',
+  qqImages: true, qqForward: true, qqVoiceReceive: true, qqVoiceSend: true,
+  qqMediaRoots: [], ffmpegPath: '', voiceReplyMode: 'auto', voiceQuietStart: 23, voiceQuietEnd: 8,
+  recallEnabled: false, recallMinMinutes: 30, recallMaxMinutes: 120, recallMaxPerDay: 3,
+  groupProactiveEnabled: false, groupProactiveMinMinutes: 30, groupProactiveMaxMinutes: 120, groupProactiveMaxPerDay: 3,
+  groupMinReplyGapSeconds: 0, groupMaxRepliesPerHour: 0,
+  proactiveStart: '09:00', proactiveEnd: '23:00',
+  qqExecutable: '', napcatFrameworkDir: '',
 };
 export function localUrl(value, schemes) {
   const url = new URL(value);
@@ -23,13 +30,18 @@ export function validate(input, previous = defaults) {
   for (const field of Object.keys(defaults)) {
     if (!(field in input)) continue;
     const value = input[field];
-    if (field === 'privateUsers' || field === 'groups') {
+    if(field==='qqMediaRoots'){
+      if(!Array.isArray(value)||value.length>10||value.some(x=>typeof x!=='string'||x.length>1000||!(/^[a-z]:[\\/]/i.test(x)||x.startsWith('/'))||x.startsWith('//')||x.startsWith('\\\\')))throw Error('QQ 媒体目录必须是本机绝对路径');
+      out[field]=[...new Set(value)];
+    } else if (field === 'privateUsers' || field === 'groups') {
       if (!Array.isArray(value) || value.length > 100 || value.some(x => typeof x !== 'string' || !/^\d{5,20}$/.test(x))) throw Error('QQ 号码请使用数字，每行一个');
       out[field] = [...new Set(value)];
-    } else if (['memoryEnabled','rotationEnabled','dshLocalAuth'].includes(field)) {
+    } else if (['memoryEnabled','rotationEnabled','dshLocalAuth','qqImages','qqForward','qqVoiceReceive','qqVoiceSend','recallEnabled','groupProactiveEnabled'].includes(field)) {
       if(typeof value!=='boolean') throw Error('开关格式不正确'); out[field]=value;
-    } else if (['memoryIdleMinutes','rotateAfterCompactions'].includes(field)) {
-      if(!Number.isInteger(value)||value<1||value>10080) throw Error('空闲时间和压缩次数需要是正整数'); out[field]=value;
+    } else if (['memoryIdleMinutes','rotateAfterCompactions','recallMinMinutes','recallMaxMinutes','recallMaxPerDay','groupProactiveMinMinutes','groupProactiveMaxMinutes','groupProactiveMaxPerDay','voiceQuietStart','voiceQuietEnd','groupMinReplyGapSeconds','groupMaxRepliesPerHour'].includes(field)) {
+      const zero=field.endsWith('PerDay')||field.startsWith('voiceQuiet')||['groupMinReplyGapSeconds','groupMaxRepliesPerHour'].includes(field);
+      const max=field.startsWith('voiceQuiet')?23:field.endsWith('PerDay')?100:10080;
+      if(!Number.isInteger(value)||value<(zero?0:1)||value>max) throw Error('时间或次数设置超出范围'); out[field]=value;
     } else {
       if (typeof value !== 'string' || value.length > 4096) throw Error('配置字段格式不正确');
       if (field.endsWith('Token') && value === '') continue;
@@ -44,6 +56,9 @@ export function validate(input, previous = defaults) {
   if (!['base', 'small'].includes(out.model)) throw Error('请选择 base 或 small 模型');
   for(const field of ['privateMessagePolicy','groupMessagePolicy']) if(!['queue','steer'].includes(out[field])) throw Error('请选择排队或插话');
   if (!['Microsoft Huihui Desktop', 'Microsoft Zira Desktop'].includes(out.voice)) throw Error('请选择已支持的本地声音');
+  if(!['auto','text','voice'].includes(out.voiceReplyMode))throw Error('语音回复模式无效');
+  for(const f of ['proactiveStart','proactiveEnd'])if(!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(out[f]))throw Error('主动消息时段格式应为 HH:mm');
+  if(out.recallMaxMinutes<out.recallMinMinutes||out.groupProactiveMaxMinutes<out.groupProactiveMinMinutes)throw Error('最长间隔不能小于最短间隔');
   for (const field of ['privatePreset', 'groupPreset']) if (out[field].length > 200) throw Error('预设名称过长');
   return out;
 }

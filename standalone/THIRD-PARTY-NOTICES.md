@@ -31,3 +31,7 @@ The ws dependency carries its own MIT license under node_modules/ws/LICENSE.
 The nine source modules listed in `lib/legacy-memory/provenance.json`, the original memory skill, and the CLI (import paths adapted) are reused from the migrated `dsh-plugin-memory` 0.10.0-qq.6 project. They depend only on Node builtins and do not load the DSH plugin runtime. Copyright (c) 2026 dsh-plugin-memory contributors. The full MIT notice is retained in `lib/legacy-memory/LICENSE`.
 
 The explicitly enabled local DSH browser-session authentication follows the protocol described by qq-bridge src/dsh-client.js (same commit above). js-yaml retains its MIT license under node_modules/js-yaml/LICENSE. NapCat is a separately downloaded official runtime, not vendored into the standalone source package.
+
+# Migrated QQ policies
+
+Version 0.4 imports the original `dsh-plugin-memory-source/lib/recall-policy.js` and `recall-nudge.js`, `dsh-group-social/lib/{images,security,core}.mjs`, and `dsh-companion-voice/lib/core.mjs`. These are the preserved source modules in this repository, not reimplementations labelled as originals. Their own license notices and module attribution remain in the source directories. The DSH/Cordis plugin entry points are not started by these imports.

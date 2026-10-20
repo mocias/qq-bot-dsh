@@ -10,12 +10,14 @@ import { DshClient } from './lib/dsh.mjs';
 import { importedStores } from './lib/import-memory.mjs';
 import { probeQQ } from './lib/onebot.mjs';
 import { MemoryStore } from './lib/memory.mjs';
+import { DesktopQQ } from './lib/desktop-qq.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export function createApp({ root = path.dirname(here), runtime = path.join(here,'.runtime'), voice: injectedVoice, bridge: injectedBridge } = {}) {
   const configFile=path.join(runtime,'config.private.json');
   let config=validate(readJson(configFile, defaults));
-  const voice=injectedVoice || new LocalVoice(root,runtime), bridge=injectedBridge || new Bridge(runtime);
+  const voice=injectedVoice || new LocalVoice(root,runtime), bridge=injectedBridge || new Bridge(runtime,{voice});
+  const desktop=new DesktopQQ(runtime);
   const token=randomBytes(32).toString('hex'), cookie=randomBytes(32).toString('hex');
   const assets = new Map([['/', ['text/html; charset=utf-8','index.html']], ['/app.js',['text/javascript; charset=utf-8','app.js']], ['/style.css',['text/css; charset=utf-8','style.css']]]);
   function json(res,status,value) { res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'}); res.end(JSON.stringify(value)); }
@@ -72,6 +74,8 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         const dsh=new DshClient(config);
         try { const presets=await dsh.probe(); json(res,200,{ok:true,presets}); } finally { dsh.close(); }
       } else if(url.pathname==='/api/qq/probe') json(res,200,await probeQQ(config));
+      else if(url.pathname==='/api/qq/desktop-check') json(res,200,await desktop.inspect(config));
+      else if(url.pathname==='/api/qq/desktop-start') json(res,200,await desktop.start(config));
       else if(url.pathname==='/api/session/new'){
         if(typeof input.key!=='string'||!/^\d{5,20}\/(?:private|group)\/\d{5,20}$/.test(input.key))throw Error('请选择一个现有聊天');
         json(res,200,await bridge.newConversation(input.key));

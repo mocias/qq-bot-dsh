@@ -62,6 +62,17 @@ export class LocalVoice {
       } catch { throw Error('本地识别失败或超时，请检查 Python 环境和模型文件'); }
     });
   }
+  async transcribeRecord(file,config){
+    const bytes=fs.readFileSync(file);
+    if(bytes.length>8*1024*1024)throw Error('QQ 语音超过大小限制');
+    if(bytes.toString('ascii',0,4)==='RIFF'&&bytes.toString('ascii',8,12)==='WAVE')return this.transcribe(bytes,config);
+    const converted=path.join(this.dir,randomUUID()+'.wav');
+    try{
+      await run(config.ffmpegPath||'ffmpeg',['-nostdin','-v','error','-i',file,'-t','120','-ar','16000','-ac','1','-y',converted],{windowsHide:true,timeout:30000,maxBuffer:65536});
+      return await this.transcribe(fs.readFileSync(converted),config);
+    }catch{throw Error('QQ 语音转换或识别失败，请检查 ffmpeg 和本地模型');}
+    finally{fs.rmSync(converted,{force:true});}
+  }
   audio(id) {
     if (!/^[0-9a-f-]{36}$/.test(id)) throw Error('音频不存在');
     return fs.readFileSync(path.join(this.dir, id+'.wav'));

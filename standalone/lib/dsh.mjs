@@ -83,7 +83,7 @@ export class DshClient {
       if(settled)throw Error('当前回合已结束');
       const id=randomUUID();inputs.set(id,null);pendingRPC++;
       try{
-        const result=await this.rpc('session/prompt',{sessionId,mode,requestId:id,clientTimeZone:'Asia/Shanghai',content:[{type:'text',text:`[QQ_INPUT:${id}]\n${content}`}]},id);
+        const result=await this.rpc('session/prompt',{sessionId,mode,requestId:id,clientTimeZone:'Asia/Shanghai',content:[{type:'text',text:`[QQ_INPUT:${id}]\n${content}`},...(mode==='queue'?(options.images??[]):[])]},id);
         if(result?.command)throw Error('桥接内容不应触发 DSH 命令');
         if(abortRequested)await this.cancel(sessionId);
       }catch(error){reject(error);throw error;}finally{pendingRPC--;complete();}

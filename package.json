@@ -14,6 +14,7 @@
     "build": "node scripts/workspace.mjs build",
     "build:bundle": "node scripts/workspace.mjs bundle",
     "start:standalone": "node standalone/server.mjs",
+    "start:desktop-qq": "node standalone/scripts/start-desktop-qq.mjs",
     "test:standalone": "npm --prefix standalone test",
     "test:voice-local": "node standalone/scripts/voice-smoke.mjs"
   }

@@ -8,7 +8,7 @@
 
 来源：[官方发布](https://github.com/NapNeko/NapCatQQ/releases/tag/v4.18.38)。所用 `NapCat.Framework.zip` SHA-256：`45ef7f46aa78588c636044b6226b4b1847e31287ab6ec36b2d48adaa9785097b`。该版本包含 `napimain.exe`、`napiloader.dll`、`nativeLoader.cjs` 与 `napiLoader.bat`。运行时不包含在本仓库；安装方式可能随版本变化，应核对下载包内说明。
 
-当前源码仓库没有自动安装器或固定桌面启动入口。新机器单独准备官方运行时，配置本机 QQ 路径及 OneBot 访问令牌，再连接 standalone。不要同时启动旧后台登录实例。迁移前备份私有配置，并确认没有正在回复的任务。
+源码不提供自动安装器。新机器单独准备官方运行时，在面板填写 QQ.exe 与 NapCat Framework 目录并保存，使用“打开桌面 QQ”或 `npm run start:desktop-qq`。接口已在线时直接复用；QQ 已运行但接口不通时拒绝重复启动，提示检查连接或退出托盘后重开。启动器不会终止 QQ，不会启动 Shell，不修改安装文件。再手动启动 standalone 的 QQ 连接。不要同时启动旧后台登录实例。迁移前备份私有配置，并确认没有正在回复的任务。
 
 ## 记忆迁移
 

@@ -31,7 +31,8 @@ test('routing excludes self, non-allowlisted users, unmentioned groups, empty au
   assert.equal(routeMessage(event({user_id:123456}),config),null);
   assert.equal(routeMessage(event({user_id:987654}),config),null);
   assert.equal(routeMessage(event({message:'[CQ:at,qq=123456] hello'}),config),null);
-  assert.equal(routeMessage(event({message:[{type:'record',data:{file:'x'}}]}),config),null);
+  assert.equal(routeMessage(event({message:[{type:'record',data:{file:'x'}}]}),config).hasMedia,true);
+  assert.equal(routeMessage(event({message:[{type:'record',data:{file:'x'}}]}),{...config,qqVoiceReceive:false}),null);
   assert.equal(routeMessage(event({message_type:'group',group_id:345678}),config),null);
   assert.equal(routeMessage(event({message_type:'group',group_id:345678,message:[{type:'at',data:{qq:'123456'}},{type:'text',data:{text:'hi'}}]}),config).key,'123456/group/345678');
 });
@@ -91,6 +92,9 @@ test('DSH client authenticates and waits for snapshot, ignores historical and ch
   const mock=await mockDsh(t),client=new DshClient({...defaults,dshUrl:mock.url,dshToken:'launch-token'});t.after(()=>client.close());
   await client.probe();const id=await client.createSession('test-workspace','safe-chat');
   assert.equal(await client.prompt(id,'你好'),'收到：你好');
+  const image={type:'image',data:'aGVsbG8=',mediaType:'image/png',name:'test.png'};
+  assert.equal(await client.prompt(id,'看图',{images:[image]}),'收到：看图');
+  assert.deepEqual(mock.requests.filter(r=>r.method==='session/prompt').at(-1).payload.args.request.content[1],image);
 });
 test('end-to-end OneBot to DSH: dedup, private/group separation, receipts and safe restart',async t=>{
   const mock=await mockDsh(t),runtime=temp();

@@ -42,15 +42,15 @@ for(const group of [false,true])test(`QQ ${group?'group':'private'} receives eve
   });
   const runtime=fs.mkdtempSync(path.join(os.tmpdir(),'qq-multiple-replies-'));
   t.after(()=>fs.rmSync(runtime,{recursive:true,force:true}));
-  const bridge=new Bridge(runtime),route={key:`100000001/${group?'group':'private'}/100000002`,id:'100000002',group,text:'你好',messageId:'m1'};
-  bridge.config={...defaults,privatePreset:'test',groupPreset:'test',qqVoiceSend:false,groupMinReplyGapSeconds:60,groupMaxRepliesPerHour:1};bridge.dsh=client;bridge.status.state='running';
+  let clock=Date.now();const bridge=new Bridge(runtime,{now:()=>clock,wait:async ms=>{clock+=ms;}}),route={key:`100000001/${group?'group':'private'}/100000002`,id:'100000002',group,text:'你好',messageId:'m1'};
+  bridge.config={...defaults,privatePreset:'test',groupPreset:'test',qqVoiceSend:false,groupMinReplyGapSeconds:60,groupMaxRepliesPerHour:4};bridge.dsh=client;bridge.status.state='running';
   const session={id:'session',route,workspace:runtime,preset:'test',blocked:false};initializeLife(session);bridge.state.sessions[bridge.scope(route)]=session;
   const sent=[];
   bridge.socket={send(bytes){const message=JSON.parse(bytes);sent.push(message.params.message.map(x=>x.data.text??'').join(''));
     queueMicrotask(()=>bridge.pending.get(message.echo)?.({status:'ok',retcode:0,data:{message_id:sent.length}}));}};
   await bridge.handle(route,bridge.generation);
-  assert.deepEqual(sent,group?['第一段正式回答\n\n第二段正式回答\n\n最后一段正式回答']:['第一段正式回答','第二段正式回答','最后一段正式回答']);
-  assert.equal(bridge.state.deliveries.length,group?1:3);
+  assert.deepEqual(sent,['第一段正式回答','第二段正式回答','最后一段正式回答']);
+  assert.equal(bridge.state.deliveries.length,3);
 });
 
 for(const collectMessages of [false,true])for(const race of [false,true])test(`${collectMessages?'multi-reply':'single-reply'} native steer ${race?'racing turn/end waits for its next turn':'suppresses only superseded answers'}`,async t=>{

@@ -6,6 +6,7 @@ import {validateChatPolicy} from './chat-policy.mjs';
 export const defaults = {
   messageToolsEnabled:true,quoteMode:'auto',mentionSend:false,pokeReceive:false,pokeSend:false,
   wakeEnabled:false,wakeKeywords:'',wakeSpeakers:[],
+  bubbleMinSeconds:2,bubbleMaxSeconds:5,
   chatPolicy: {private:{},group:{},overrides:{}},
   dshUrl: 'http://127.0.0.1:3080', dshToken: '', dshLocalAuth: false,
   qqUrl: 'ws://127.0.0.1:3001', qqToken: '', botQQ: '',
@@ -47,6 +48,8 @@ export function validate(input, previous = defaults) {
       out[field] = [...new Set(value)];
     } else if (['messageToolsEnabled','mentionSend','pokeReceive','pokeSend','wakeEnabled','memoryAutoInject','memoryRegisterSkill','memoryActiveOnly','qqFiles','groupAmbientEnabled','groupToolsEnabled','knowledgeEnabled','remindersEnabled','memoryEnabled','rotationEnabled','dshLocalAuth','qqImages','qqForward','qqVoiceReceive','qqVoiceSend','recallEnabled','groupProactiveEnabled'].includes(field)) {
       if(typeof value!=='boolean') throw Error('开关格式不正确'); out[field]=value;
+    } else if (['bubbleMinSeconds','bubbleMaxSeconds'].includes(field)) {
+      if(!Number.isInteger(value)||value<1||value>60)throw Error('气泡间隔应为 1～60 秒');out[field]=value;
     } else if (['memoryBootMaxChars','memoryPageMaxChars','proactiveMaxPerSession'].includes(field)) {
       const budget=field!=='proactiveMaxPerSession';
       if(!Number.isInteger(value)||value<(budget?1000:0)||value>(budget?30000:100))throw Error('记忆容量或次数超出范围');
@@ -65,6 +68,7 @@ export function validate(input, previous = defaults) {
   if (input.clearQqToken === true) out.qqToken = '';
   if (input.clearMimoApiKey === true) out.mimoApiKey = '';
   if(!['auto','never','always'].includes(out.quoteMode))throw Error('引用模式无效');
+  if(out.bubbleMaxSeconds<out.bubbleMinSeconds)throw Error('气泡最长间隔不能小于最短间隔');
   if(out.wakeKeywords.length>500)throw Error('唤醒关键词过长');
   if(!['local','mimo'].includes(out.voiceProvider))throw Error('请选择本地模式或 MiMo API');
   if(!['preset','design','clone'].includes(out.mimoTtsMode))throw Error('请选择预置音色、音色设计或音色克隆');

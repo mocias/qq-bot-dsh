@@ -258,8 +258,12 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         if(typeof input.key!=='string'||!/^\d{5,20}\/(?:private|group)\/\d{5,20}$/.test(input.key))throw Error('请选择一个现有聊天');
         json(res,200,await bridge.newConversation(input.key));
       }
-      else if (url.pathname==='/api/bridge/start') { await syncInterface();await bridge.start(config); json(res,200,bridge.status); }
-      else if (url.pathname==='/api/bridge/stop') { bridge.stop(); json(res,200,bridge.status); }
+      else if (url.pathname==='/api/bridge/start') {
+        const kind=input.kind??'all';if(!['all','private','group'].includes(kind))throw Error('请选择私聊、群聊或全部');
+        if(bridge.status.state==='stopped')await syncInterface();
+        await bridge.start(config,kind);json(res,200,bridge.status);
+      }
+      else if (url.pathname==='/api/bridge/stop') { bridge.stop(input.kind??'all'); json(res,200,bridge.status); }
       else json(res,404,{error:'接口不存在'});
     } catch(error) { json(res,400,{error:error instanceof SyntaxError ? '数据格式不正确' : error.message}); }
   });

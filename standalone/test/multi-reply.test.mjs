@@ -10,7 +10,7 @@ import {initializeLife} from '../lib/lifecycle.mjs';
 function fixture(t,{failureAt,stopAt}={}){
   const runtime=fs.mkdtempSync(path.join(os.tmpdir(),'qq-batch-'));
   t.after(()=>fs.rmSync(runtime,{recursive:true,force:true}));
-  const bridge=new Bridge(runtime),route={key:'100000001/private/100000002',id:'100000002',group:false,text:'记住我喜欢茶',messageId:'m1'};
+  const bridge=new Bridge(runtime,{wait:async()=>{}}),route={key:'100000001/private/100000002',id:'100000002',group:false,text:'记住我喜欢茶',messageId:'m1'};
   bridge.config={...defaults,privatePreset:'test',qqVoiceSend:false,knowledgeEnabled:true};bridge.status.state='running';
   const session={id:'session',route,workspace:runtime,preset:'test',blocked:false};
   initializeLife(session);bridge.state.sessions[bridge.scope(route)]=session;

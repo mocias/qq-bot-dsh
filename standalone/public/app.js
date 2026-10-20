@@ -248,7 +248,7 @@ let generatedUrl='',initialized=false;
 function notice(text,error=false){$('notice').textContent=text;$('notice').classList.toggle('error',error);}
 async function request(url,body){const response=await fetch(url,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-QQ-RSI':'panel'},body:JSON.stringify(body)});const result=await response.json();if(!response.ok)throw Error(result.error||'请求失败');return result;}
 function fill(config,selected=fields){for(const field of selected){if(field.endsWith('Token')){$(field).value='';continue;}if(switches.includes(field)){$(field).checked=config[field];continue;}$(field).value=Array.isArray(config[field])?config[field].join('\n'):config[field];}$('dsh-key-state').textContent=config.dshTokenConfigured?'已保存':'未配置';$('qq-key-state').textContent=config.qqTokenConfigured?'已保存':'未配置';}
-async function refresh(){const status=await request('/api/status');if(!initialized){fill(status.config);await fillVoice(status.config);initialized=true;}$('service-status').textContent='● 独立服务已运行';paintVoiceStatus(status);$('bridge-status').textContent=status.bridge.state==='running'?'QQ '+(status.bridge.account||'')+' 已连接':status.bridge.state==='connecting'?'正在连接 QQ':'QQ 连接已停止';$('bridge-detail').textContent=status.bridge.lastError||`待处理消息：${status.bridge.active} · 启动后接收名单内已启用的消息`;$('start').disabled=status.bridge.state!=='stopped';$('stop').disabled=status.bridge.state==='stopped';paintLife(status);return status;}
+async function refresh(){const status=await request('/api/status');if(!initialized){fill(status.config);await fillVoice(status.config);initialized=true;}$('service-status').textContent='● 独立服务已运行';paintVoiceStatus(status);$('bridge-status').textContent=status.bridge.state==='running'?'QQ '+(status.bridge.account||'')+' 已连接':status.bridge.state==='connecting'?'正在连接 QQ':'QQ 连接已停止';$('bridge-detail').textContent=status.bridge.lastError||`待处理消息：${status.bridge.active} · 启动后接收名单内已启用的消息`;$('start').disabled=status.bridge.state!=='stopped';$('stop').disabled=status.bridge.state==='stopped';paintChannels(status.bridge);paintLife(status);return status;}
 async function action(button,work){button.disabled=true;notice('正在处理，请稍候…');try{await work();if($('notice').textContent==='正在处理，请稍候…')notice('操作已完成。');}catch(error){notice(error.message,true);}finally{button.disabled=false;if(button.id.startsWith('voice-profile-'))updateProfileButtons();if(button.id==='reference-delete')button.disabled=!$('mimoReferenceId').value;if(button.id==='reference-restore')button.disabled=$('reference-deleted').options.length<=1;await refresh().catch(()=>{});}}
 const pages={
   voice:['语音与通话','选择语音服务、配置音色并试听；实时通话后续接入。'],
@@ -279,6 +279,24 @@ async function recognize(buffer){$('voice-progress').textContent='正在使用�
 $('transcribe').addEventListener('click',()=>action($('transcribe'),async()=>{const file=$('audio-file').files[0];if(!file)throw Error('请先选择音频');if(file.size>8*1024*1024)throw Error('文件不能超过 8 MiB');await recognize(await file.arrayBuffer());}));
 $('recognize-generated').addEventListener('click',()=>action($('recognize-generated'),async()=>{const response=await fetch(generatedUrl);if(!response.ok)throw Error('生成的音频已过期，请重新生成');await recognize(await response.arrayBuffer());}));
 $('probe').addEventListener('click',()=>action($('probe'),async()=>{const result=await request('/api/dsh/probe',{});$('presets').hidden=false;$('presets').textContent=JSON.stringify(result.presets,null,2);notice('DSH 连接成功，下方显示可用预设。');}));
+function paintChannels(bridge){
+ const running=bridge.state==='running',connecting=bridge.state==='connecting',channels=bridge.channels??{};
+ const text='私聊：'+(running&&channels.private?'接收中':'已停止')+' · 群聊：'+(running&&channels.group?'接收中':'已停止');
+ $('bridge-detail').textContent=(bridge.lastError?bridge.lastError+' · ':'')+text+' · 待处理：'+bridge.active;
+ $('qq-control-bridge').textContent=text+' · 待处理：'+bridge.active;
+ for(const prefix of ['', 'qq-control-']){
+  $(prefix+'start').disabled=connecting||(running&&channels.private&&channels.group);
+  $(prefix+'stop').disabled=bridge.state==='stopped';
+  for(const kind of ['private','group']){
+   $(prefix+'start-'+kind).disabled=connecting||!!(running&&channels[kind]);
+   $(prefix+'stop-'+kind).disabled=connecting||!(running&&channels[kind]);
+  }
+ }
+}
+for(const prefix of ['', 'qq-control-'])for(const kind of ['private','group'])for(const verb of ['start','stop']){
+ const button=$(prefix+verb+'-'+kind);
+ button.onclick=()=>action(button,async()=>{await request('/api/bridge/'+verb,{kind});notice((kind==='private'?'私聊':'群聊')+(verb==='start'?'接收已启动。':'接收已停止。'));});
+}
 $('start').addEventListener('click',()=>action($('start'),async()=>{await request('/api/bridge/start',{});notice('QQ 连接已启动。');}));
 $('stop').addEventListener('click',()=>action($('stop'),async()=>{await request('/api/bridge/stop',{});notice('QQ 连接已停止。');}));
 refresh().catch(error=>notice(error.message,true));setInterval(()=>refresh().catch(()=>{$('service-status').textContent='服务连接中断';}),5000);
@@ -460,7 +478,7 @@ async function refreshQQ(){
  $('qq-qrcode').disabled=!!data.online;
  const status=await request('/api/status');
  $('qq-control-bridge').textContent='机器人接收：'+(status.bridge.state==='running'?'运行中':status.bridge.state==='connecting'?'连接中':'已停止')+' · 待处理：'+status.bridge.active;
- $('qq-control-start').disabled=status.bridge.state!=='stopped';$('qq-control-stop').disabled=status.bridge.state==='stopped';
+ paintChannels(status.bridge);
 }
 $('qq-control-refresh').onclick=()=>action($('qq-control-refresh'),refreshQQ);
 for(const [id,url]of [['qq-control-desktop','/api/qq/desktop-start'],['qq-control-sync','/api/qq/sync'],['qq-control-start','/api/bridge/start'],['qq-control-stop','/api/bridge/stop']])$(id).onclick=()=>action($(id),async()=>{const result=await request(url,{});notice(result.message||'操作已完成。');await refreshQQ();});

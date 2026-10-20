@@ -6,9 +6,11 @@ export const policyFields={
   messageToolsEnabled:{...bool('消息查询、未读管理与统一回复工具','消息功能'),help:'仅查询本机接入后保留的本聊天最近500条消息；允许群的未提及消息也进入索引，但不会因此自动回复。'},
   quoteMode:{type:'select',label:'引用回复',section:'消息功能',options:{auto:'按需引用',never:'不发送引用',always:'普通回复默认引用当前消息'}},
   mentionSend:bool('允许群内 @ 指定成员','消息功能',['group']),
+  bubbleMinSeconds:{...number('气泡随机间隔最短（秒）','消息功能',1,60),help:'不同话题分成独立 QQ 消息；每条可分别引用、@ 或不 @。群发送最短间隔更长时优先遵守群限制。'},
+  bubbleMaxSeconds:number('气泡随机间隔最长（秒）','消息功能',1,60),
   pokeReceive:bool('被拍一拍时允许回应','消息功能'),
   pokeSend:bool('允许发送拍一拍','消息功能'),
-  wakeEnabled:{...bool('启用潜水与唤醒','潜水与唤醒'),help:'潜水期间暂停被动接话和定时搭话；直接私聊、@、引用机器人及已启用的拍一拍仍可唤醒。到期只恢复原调度。'},
+  wakeEnabled:{...bool('启用潜水与唤醒','潜水与唤醒'),help:'潜水期间暂停被动接话和定时搭话；明确预约的提醒照常投递，不等潜水结束。直接私聊、@、引用机器人及已启用的拍一拍仍可唤醒。到期只恢复原调度。'},
   wakeSpeakers:{type:'ids',label:'潜水唤醒群成员（每行一个 QQ）',section:'潜水与唤醒',kinds:['group']},
   preset:{type:'string',label:'DSH 对话预设名称',section:'会话与记忆',max:200},
   messagePolicy:{type:'select',label:'新消息处理',section:'会话与记忆',options:{queue:'排队等待',steer:'插入当前回合'}},
@@ -101,6 +103,7 @@ export function validateChatPolicy(value,config){
   }
   for(const scope of ['private','group',...Object.keys(out.overrides)]){
     const p=policyView({...config,chatPolicy:out},scope).effective;
+    if(p.bubbleMaxSeconds<p.bubbleMinSeconds)throw Error('气泡最长间隔不能小于最短间隔');
     if(p.proactiveMaxMinutes<p.proactiveMinMinutes)throw Error('主动搭话最长间隔不能小于最短间隔');
   }
   return out;

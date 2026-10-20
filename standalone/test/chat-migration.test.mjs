@@ -18,7 +18,7 @@ const route={key,id:'100000003',group:true,sender:'100000002',text:'你好',mess
 const env=(reply='',actions=[])=>JSON.stringify({reply,memory:[],actions});
 function temp(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'qq-v012-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
 function fixture(t,extra={}){
-  const runtime=temp(t),bridge=new Bridge(runtime);bridge.config={...conf,...extra};bridge.status.state='running';
+  const runtime=temp(t),bridge=new Bridge(runtime,{wait:async()=>{}});bridge.config={...conf,...extra};bridge.status.state='running';
   bridge.inbox(key).append({messageId:'1',sourceId:route.messageId,sender:route.sender,text:'你好'});
   bridge.dsh={createSession:async()=> 's1',rename:async()=>{},close(){}};
   const sent=[];bridge.socket={close(){},send(raw){

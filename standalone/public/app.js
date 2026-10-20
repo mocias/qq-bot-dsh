@@ -23,7 +23,7 @@ function paintPolicy(data){
   policyData={...data,savedPatch:data.savedPatch??(data.scope===data.kind?data.effective:data.override)};
   const specific=data.scope!==data.kind,container=$('policy-fields');container.replaceChildren();
   const cards=new Map();
-  $('policy-context').textContent=specific?'只影响此聊天；未勾选“单独设置”的项目继承'+(data.kind==='group'?'群聊':'私聊')+'默认值。':'作为'+(data.kind==='group'?'所有群聊':'所有私聊')+'的默认规则；独立覆盖的字段优先。';
+  $('policy-context').textContent=(specific?'只影响此聊天；未勾选“单独设置”的项目继承'+(data.kind==='group'?'群聊':'私聊')+'默认值。':'作为'+(data.kind==='group'?'所有群聊':'所有私聊')+'的默认规则；独立覆盖的字段优先。')+' 新工作区在首次开启对话时按“日期-QQ号/群号”创建；已有工作区和会话轮换继续沿用原目录。';
   $('policy-reset').textContent=specific?'清除本聊天覆盖，全部继承':'恢复升级时的默认规则';
   $('policy-delete').hidden=!specific;$('target-remove').hidden=!specific;
   $('policy-delete').disabled=!Object.keys(data.override).length;
@@ -410,7 +410,7 @@ $('memory-id').onchange=()=>{if($('memory-id').value)$('memory-open').click();};
 function paintLife(status){
  if(!loadedKey)return;
  const sessions=(status.lifecycle??[]).filter(s=>s.key===loadedKey);
- $('lifecycle-status').textContent=sessions.length?sessions.map(s=>(s.title?s.title+' · ':'')+'已压缩 '+s.compactions+' 次 · 待整理 '+s.pendingCompactions+' 次'+(s.maintenance?' · 整理中':'')+(s.blocked?' · 旧回合已隔离':'')).join('\n'):'此聊天暂无运行会话；记忆库可独立管理。';
+ $('lifecycle-status').textContent=sessions.length?sessions.map(s=>(s.title?s.title+' · ':'')+'已压缩 '+s.compactions+' 次 · 待整理 '+s.pendingCompactions+' 次'+(s.maintenance?' · 整理中':'')+(s.blocked?' · 旧回合已隔离':'')+(s.workspace?'\n工作区：'+s.workspace:'')).join('\n'):'此聊天暂无运行会话；记忆库可独立管理。';
 }
 async function reloadManaged(){
   const key=$('manage-key').value,serial=++manageSerial;loadedKey='';managementData=null;

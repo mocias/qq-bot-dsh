@@ -12,7 +12,7 @@ export const defaults = {
   dshUrl: 'http://127.0.0.1:3080', dshToken: '', dshLocalAuth: false,
   qqUrl: 'ws://127.0.0.1:3001', qqToken: '', botQQ: '',
   adminUsers: [], qqFiles: false, groupAmbientEnabled: false, groupAmbientDelaySeconds: 10, groupAmbientMinSeconds: 300, groupToolsEnabled: false, knowledgeEnabled: false, remindersEnabled: false,
-  privateUsers: [], groups: [], privatePreset: '', groupPreset: '',
+  privateUsers: [], groups: [], privatePreset: '', groupPreset: '', permissionPreset:'',
   voice: 'Microsoft Huihui Desktop', model: 'small',
   voiceProvider: 'local', mimoApiKey: '', mimoTtsMode: 'preset', mimoVoice: 'mimo_default',
   mimoReferenceId: '', mimoStyle: '', mimoDesign: '', mimoAsrLanguage: 'auto',
@@ -88,6 +88,7 @@ export function validate(input, previous = defaults) {
   for(const field of ['privateMessagePolicy','groupMessagePolicy']) if(!['queue','steer'].includes(out[field])) throw Error('请选择排队或插话');
   if (!['Microsoft Huihui Desktop', 'Microsoft Zira Desktop'].includes(out.voice)) throw Error('请选择已支持的本地声音');
   if(!['auto','text','voice'].includes(out.voiceReplyMode))throw Error('语音回复模式无效');
+  if(!['','read-only','workspace-write','danger-full-access'].includes(out.permissionPreset))throw Error('新对话权限选项无效');
   if(!['scheduled','always','never'].includes(out.voiceQuietMode))throw Error('语音安静模式无效');
   for(const f of ['proactiveStart','proactiveEnd'])if(!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(out[f]))throw Error('主动消息时段格式应为 HH:mm');
   if(out.recallMaxSeconds<out.recallMinSeconds||out.groupProactiveMaxSeconds<out.groupProactiveMinSeconds)throw Error('最长间隔不能小于最短间隔');

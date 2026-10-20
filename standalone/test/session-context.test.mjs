@@ -94,3 +94,12 @@ test('a local delivery error keeps the completed session while a fresh session b
  await bridge.handle({...route,messageId:'fresh-input'},0);
  assert.equal(created(),1);assert.match(prompts[2],/PERSONA_SENTINEL|BOOT_MEMORY_SENTINEL/);
 });
+test('existing sessions receive the unified memory policy once without reinjecting documents',async t=>{
+ const {bridge,route,session,prompts}=setup(t);
+ await bridge.handle(route,0);delete session.memoryPolicyVersion;
+ await bridge.handle({...route,messageId:'upgrade'},0);
+ assert.match(prompts[1],/私聊和群聊均可自动记住/);
+ assert.doesNotMatch(prompts[1],/BOOT_MEMORY_SENTINEL|独立服务适配规则/);
+ await bridge.handle({...route,messageId:'after-upgrade'},0);
+ assert.doesNotMatch(prompts[2],/宿主记忆规则更新/);
+});

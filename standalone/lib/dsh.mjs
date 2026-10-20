@@ -37,7 +37,7 @@ export class DshClient {
     this.systemLog?.record('rpc.'+operation+'.started',{component:'dsh'});
     try {
     await this.authenticate();
-    const args = method === 'agentPresets/list' ? {} : { [method === 'session/list' ? '_request' : 'request']: request };
+    const args = ['agentPresets/list','permissionPresets/catalog'].includes(method) ? {} : method==='commands/execute'?request:{ [method === 'session/list' ? '_request' : 'request']: request };
     let response;
     try {
       response = await fetch(new URL('/api/'+method, this.config.dshUrl), { method: 'POST', redirect: 'error',
@@ -54,6 +54,13 @@ export class DshClient {
     }
   }
   async probe() { return this.rpc('agentPresets/list'); }
+  async applyPermission(sessionId,preset){
+    if(!['read-only','workspace-write','danger-full-access'].includes(preset))throw Error('新对话权限选项无效');
+    const catalog=await this.rpc('permissionPresets/catalog');
+    if(!catalog?.defaultOptions?.some(x=>x.value===preset))throw Error('此 DSH 不支持所选新对话权限：'+preset);
+    const result=await this.rpc('commands/execute',{agentId:sessionId,line:'/permission '+preset,submittedAttachments:[]});
+    if(result?.result?.kind!=='success')throw Error('DSH 未成功设置新对话权限；尚未提交聊天消息');
+  }
   async createSession(workspacePath, preset) {
     const workspace = await this.rpc('workspace/create', { path: workspacePath });
     if (!workspace?.workspace?.workspaceId) throw Error('DSH 工作区响应格式不兼容');

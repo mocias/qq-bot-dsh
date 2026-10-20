@@ -33,6 +33,9 @@ export class DshClient {
     this.cookie = cookies.join('; ');
   }
   async rpc(method, request = {}, rpcId = randomUUID()) {
+    const started=Date.now(),operation=/^[a-zA-Z]+\/[a-zA-Z]+$/.test(method)?method.replace(/[A-Z]/g,x=>x.toLowerCase()).replace('/','.'): 'request';
+    this.systemLog?.record('rpc.'+operation+'.started',{component:'dsh'});
+    try {
     await this.authenticate();
     const args = method === 'agentPresets/list' ? {} : { [method === 'session/list' ? '_request' : 'request']: request };
     let response;
@@ -44,7 +47,11 @@ export class DshClient {
     if (!response.ok) { await response.body?.cancel(); this.cookie = ''; throw Error('DSH 返回 HTTP '+response.status); }
     const body = await response.json();
     if (body.type !== 'server-response' || body.rpcId !== rpcId || !body.result?.ok) throw Error('DSH 未接受 '+method+' 请求，请在 DSH 中检查预设和会话');
+    this.systemLog?.record('rpc.'+operation+'.completed',{component:'dsh',durationMs:Date.now()-started});
     return body.result.value;
+    } catch(error) {
+      this.systemLog?.record('rpc.'+operation+'.failed',{component:'dsh',level:'error',durationMs:Date.now()-started});throw error;
+    }
   }
   async probe() { return this.rpc('agentPresets/list'); }
   async createSession(workspacePath, preset) {
@@ -91,7 +98,7 @@ export class DshClient {
     const finished = new Promise((resolve,reject) => { finishResolve=resolve; finishReject=reject; });
     // Both promises can reject before the sequential awaits begin.
     ready.catch(() => {}); finished.catch(() => {});
-    const reject=error=>{settled=true;run.accepting=false;readyReject(error);finishReject(error);};
+    const reject=error=>{if(!settled)this.systemLog?.record('stream.failed',{component:'dsh',level:'error'});settled=true;run.accepting=false;readyReject(error);finishReject(error);};
     const fail = () => reject(Error('DSH 回合中断，请检查 DSH；本次消息不会自动重发'));
     const complete=()=>{
       if(settled||!submitted||pendingRPC||!inputs.size)return;
@@ -128,12 +135,14 @@ export class DshClient {
       if (frame.streamId !== streamId) return;
       if (frame.type === 'error' || frame.type === 'end') { fail(); return; }
       if (frame.type !== 'item') return;
-      if (frame.value?.type === 'snapshot') { clearTimeout(readyTimer); readyResolve(); return; }
+      if (frame.value?.type === 'snapshot') { this.systemLog?.record('stream.snapshot',{component:'dsh'});clearTimeout(readyTimer); readyResolve(); return; }
       if (!submitted || frame.value?.type !== 'event') return;
       const event = frame.value.event, data = event?.data;
       try {
         if(Number.isSafeInteger(event?.seq)){if(seenEvents.has(event.seq))return;seenEvents.add(event.seq);}
         options.onEvent?.(event);
+        if(['turn/start','user/message','assistant/message','turn/end','tool/call','tool/result','approval/request'].includes(event?.type))
+          this.systemLog?.record('stream.'+event.type.replace('/','.'),{component:'dsh'});
         if(event?.type==='turn/start'){currentTurn=data.turn;if(!turns.has(currentTurn))turns.set(currentTurn,{messages:[],ended:false});}
         if(event?.type==='user/message'){
           const message=data.message??data;

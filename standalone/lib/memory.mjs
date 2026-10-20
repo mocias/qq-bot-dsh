@@ -16,7 +16,15 @@ const allowedPage = /^(?:user|identity|skills|decisions|concepts|projects\/(?:ac
 const bound=(text,n)=>typeof text==='string'?text.slice(0,n):'';
 export function decodeReply(text) {
   const cleaned=text.trim().replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,'');
-  try { const data=JSON.parse(cleaned); if(typeof data.reply==='string' && Array.isArray(data.memory)) return data; } catch {}
+  try {
+    const data=JSON.parse(cleaned);
+    if(data&&typeof data.reply==='string'){
+      // A complete reply may omit memory when there is nothing to save.
+      // Do not repair truncated JSON or coerce a present but invalid memory payload.
+      if(!Object.hasOwn(data,'memory'))return {...data,memory:[]};
+      if(Array.isArray(data.memory))return data;
+    }
+  } catch {}
   // Never forward an incomplete internal memory envelope as a public reply.
   if (/^\s*(?:```json\s*)?\{/.test(text) && /"(?:reply|memory)"\s*:/.test(text)) throw Error('模型返回了不完整的记忆格式，本次回复未发送');
   return {reply:text,memory:[]};

@@ -5,12 +5,13 @@ import path from 'node:path';
 // credentials, query strings or arbitrary upstream error text.
 export class SystemLog {
   constructor(runtime){this.file=path.join(runtime,'logs','system.jsonl');}
-  record(event,{level='info',component='system',operation='',count,durationMs}={}){
+  record(event,{level='info',component='system',operation='',count,durationMs,chat}={}){
     if(!/^[a-z][a-z0-9_.-]{0,79}$/.test(event))return;
     const entry={time:new Date().toISOString(),level:['info','warn','error'].includes(level)?level:'info',component:/^[a-z-]{1,30}$/.test(component)?component:'system',event};
     if(/^\/api\/[a-z/-]{1,80}$/.test(operation))entry.operation=operation;
     if(Number.isFinite(count))entry.count=count;
     if(Number.isFinite(durationMs))entry.durationMs=durationMs;
+    if(typeof chat==='string'&&/^\d{5,20}\/(private|group)\/\d{5,20}$/.test(chat))entry.chat=chat;
     try{
       fs.mkdirSync(path.dirname(this.file),{recursive:true});
       if(fs.existsSync(this.file)&&fs.statSync(this.file).size>1024*1024){

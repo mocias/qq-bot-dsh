@@ -26,7 +26,35 @@ export class QQControl{
     };
     const auth=await call('/auth/login',{hash:createHash('sha256').update(web.token+'.napcat').digest('hex')});
     if(!auth?.Credential||auth.require2FA)throw Error('NapCat 管理登录需要人工处理');
-    credential=auth.Credential;return call;
+    credential=auth.Credential;
+    call.logStream=async signal=>{
+      const response=await this.fetch(origin+'/api/Log/GetLogRealTime',{redirect:'error',signal,headers:{Authorization:'Bearer '+credential}});
+      if(!response.ok||!response.headers.get('content-type')?.includes('text/event-stream')){await response.body?.cancel();throw Error('NapCat 实时日志接口不可用');}
+      return response.body;
+    };
+    return call;
+  }
+  async followLogs(config,{signal,onLine,onReady}){
+    const call=await this.admin(config);if(signal.aborted)return;
+    const stream=await call.logStream(signal);onReady();
+    const decoder=new TextDecoder();let pending='';
+    for await(const chunk of stream){
+      pending+=decoder.decode(chunk,{stream:true});
+      // Drop an oversized partial record, rather than exposing a cut-off secret.
+      if(pending.length>262144)throw Error('NapCat 日志记录过大');
+      let end;
+      let separator;
+      while((separator=/\r?\n\r?\n/.exec(pending))){
+        end=separator.index;
+        const frame=pending.slice(0,end);pending=pending.slice(end+separator[0].length);
+        let data=frame.split(/\r?\n/).filter(x=>x.startsWith('data:')).map(x=>x.slice(5).trimStart()).join('\n');
+        if(data){
+          try{const item=JSON.parse(data);if(typeof item.message==='string')data=(['info','warn','error','debug'].includes(item.level)?'['+item.level+'] ':'')+item.message;}catch{}
+          onLine(data);
+        }
+      }
+    }
+    if(!signal.aborted)throw Error('NapCat 实时日志连接已结束');
   }
   async status(config){
     const result={expectedAccount:config.botQQ,account:'',online:false,napcatReady:false,phase:'unknown',message:''};

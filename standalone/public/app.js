@@ -447,12 +447,34 @@ $('memory-reset').onclick=()=>action($('memory-reset'),()=>resetMemory(false));
 $('memory-reset-account').onclick=()=>action($('memory-reset-account'),()=>resetMemory(true));
 
 const logNames={'service.started':'服务启动','service.stopped':'服务停止','service.error':'服务异常','operation.completed':'操作完成','operation.failed':'操作失败','memory.reset':'记忆已重置','bridge.start.requested':'正在启动 QQ 接收','bridge.connected':'QQ 连接成功','bridge.stopped':'QQ 接收已停止','bridge.error':'QQ 处理异常（详情见连接状态）','turn.started':'Agent 回合开始','turn.completed':'Agent 回合结束','turn.failed':'Agent 回合失败','message.accepted':'已接收一条名单内消息','maintenance.started':'记忆整理开始','maintenance.completed':'记忆整理结束','maintenance.failed':'记忆整理失败','message.sent':'消息投递成功','message.failed':'消息投递失败','message.unknown':'消息投递结果未知'};
+Object.assign(logNames,{'input.observed':'收到名单内 QQ 消息，已进入路由','input.channel_disabled':'收到消息，但对应私聊/群聊接收未启动','input.mention_required':'已索引；未开启群聊自主参与，等待 @ 或引用机器人','input.diving':'已索引；潜水期间不触发普通群消息','ambient.buffered':'等待合并群消息','ambient.cooldown':'未提交 DSH：自主参与判断间隔尚未结束（剩余）','ambient.busy':'未提交 DSH：该聊天已有任务；消息保留在索引','ambient.submitted':'合并完成，提交 Agent','delivery.hourly_limit':'未投递：达到群聊每小时回复上限','delivery.gap':'等待群聊最短发送间隔','delivery.rate_limit':'未投递：群聊发送频率限制','stream.failed':'DSH 回合中断或失败','stream.snapshot':'DSH 会话订阅已就绪','stream.turn.start':'DSH 回合开始','stream.user.message':'DSH 已接收输入','stream.assistant.message':'DSH 产生一段正式回复','stream.turn.end':'DSH 回合结束','stream.tool.call':'DSH 调用工具','stream.tool.result':'DSH 工具完成','stream.approval.request':'DSH 请求审批'});
+function logLabel(event){
+ if(logNames[event])return logNames[event];
+ const match=event.match(/^rpc\.(.+)\.(started|completed|failed)$/);
+ return match?'DSH '+match[1].replaceAll('.','/')+' · '+({started:'请求开始',completed:'请求成功',failed:'请求失败'})[match[2]]:event;
+}
+function logText(entries){return entries.map(e=>`${new Date(e.time).toLocaleString('zh-CN')} [${e.level}] [${e.component}] ${logLabel(e.event)}${e.chat?' · '+e.chat:''}${e.operation?' '+e.operation:''}${e.count!==undefined?' · 数量 '+e.count:''}${e.durationMs!==undefined?' · '+Math.ceil(e.durationMs/1000)+' 秒':''}`).join('\n')||'暂无记录。';}
+function renderLogFiles(id,files){
+ const target=$(id),opened=new Set([...target.querySelectorAll('details[open]')].map(e=>e.dataset.name));target.replaceChildren();
+ if(!files.length){target.textContent='未发现日志文件（可能未启用文件日志）。';return;}
+ for(const file of files){const detail=document.createElement('details'),summary=document.createElement('summary'),pre=document.createElement('pre');detail.className='log-file';detail.dataset.name=file.name;detail.open=opened.has(file.name);summary.textContent=file.name+(file.updatedAt?' · '+new Date(file.updatedAt).toLocaleString('zh-CN'):'');pre.className='related-log';pre.textContent=file.error||file.text||'此文件为空。';if(file.truncated)pre.textContent='（仅显示文件末尾）\n'+pre.textContent;detail.append(summary,pre);target.append(detail);}
+}
+let logsLoading=false;
 async function loadLogs(){
+ if(logsLoading)return;logsLoading=true;
+ try{
  const level=$('log-level').value,component=$('log-component').value;
- const data=await request('/api/logs?level='+encodeURIComponent(level)+'&component='+encodeURIComponent(component));
+ const results=await Promise.allSettled([request('/api/logs?level='+encodeURIComponent(level)+'&component='+encodeURIComponent(component)),request('/api/logs/related')]);
  if(level!==$('log-level').value||component!==$('log-component').value)return;
- $('system-logs').textContent=data.entries.map(e=>`${new Date(e.time).toLocaleString('zh-CN')} [${e.level}] [${e.component}] ${logNames[e.event]??e.event}${e.operation?' '+e.operation:''}${e.count!==undefined?' · 数量 '+e.count:''}${e.durationMs!==undefined?' · '+e.durationMs+' ms':''}`).join('\n')||'暂无匹配日志。';
- $('logs-state').textContent=(data.writeFailed?'日志写入异常，请检查本机目录权限。':'')+'已加载 '+data.entries.length+' 条 · '+new Date().toLocaleTimeString('zh-CN');
+ if(results[0].status==='fulfilled'){const data=results[0].value;$('system-logs').textContent=logText(data.entries);$('logs-state').textContent=(data.writeFailed?'日志写入异常，请检查目录权限。':'')+'已加载 '+data.entries.length+' 条 · '+new Date().toLocaleTimeString('zh-CN');}else $('logs-state').textContent='系统日志暂时无法刷新';
+ if(results[1].status==='fulfilled'){
+ const data=results[1].value,state=data.status,when=v=>v?new Date(v).toLocaleString('zh-CN'):'暂无记录';
+ $('flow-status').textContent=`连接：${state.state==='running'?'运行中':'已停止'} · 私聊${state.channels?.private?'已启动':'未启动'} · 群聊${state.channels?.group?'已启动':'未启动'}。最近收到：${when(state.lastObservedAt)}；最近提交处理：${when(state.lastReceivedAt)}；最近发出：${when(state.lastSentAt)}。${state.lastError||''}`;
+ $('flow-logs').textContent=logText(data.flow.entries);$('dsh-logs').textContent=logText(data.dshEvents.entries);
+ $('napcat-log-status').textContent=data.napcat.state;$('napcat-logs').textContent=data.napcat.entries.map(e=>e.text).join('\n')||'等待新的 NapCat 日志。';
+ renderLogFiles('dsh-log-files',data.dsh.files);renderLogFiles('napcat-log-files',data.napcat.files);renderLogFiles('process-log-files',data.process.files);
+ }else $('flow-status').textContent='相关日志暂时无法刷新；上次结果可能已过期。';
+ }finally{logsLoading=false;}
 }
 $('logs-refresh').onclick=()=>action($('logs-refresh'),loadLogs);
 $('log-level').onchange=$('log-component').onchange=()=>loadLogs().catch(e=>notice(e.message,true));

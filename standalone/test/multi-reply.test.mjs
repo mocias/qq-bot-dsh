@@ -6,6 +6,7 @@ import path from 'node:path';
 import {Bridge} from '../lib/bridge.mjs';
 import {defaults} from '../lib/config.mjs';
 import {initializeLife} from '../lib/lifecycle.mjs';
+import {decodeReply} from '../lib/memory.mjs';
 
 function fixture(t,{failureAt,stopAt}={}){
   const runtime=fs.mkdtempSync(path.join(os.tmpdir(),'qq-batch-'));
@@ -46,6 +47,21 @@ test('a malformed memory envelope in any complete reply prevents partial public 
   const {bridge,route,sent}=fixture(t);
   bridge.dsh.prompt=async()=>[envelope('看似正常'),'{\"reply\":\"未完成\",\"memory\":['];
   await assert.rejects(bridge.handle(route,0),/不完整/);assert.equal(sent.length,0);
+});
+
+test('complete reply without an optional memory field still reaches QQ and does not write memory',async t=>{
+  const {bridge,route,sent}=fixture(t);
+  bridge.dsh.prompt=async()=>[JSON.stringify({reply:'没有新记忆的普通回答'}),envelope('另一段回答')];
+  await bridge.handle(route,0);
+  assert.deepEqual(sent.map(text),['没有新记忆的普通回答','另一段回答']);
+  assert.equal(bridge.memory(route.key).pages().length,0);
+});
+
+test('missing memory compatibility does not coerce invalid memory or expose incomplete JSON',()=>{
+  for(const memory of [null,{},'not an array',true])assert.throws(()=>decodeReply(JSON.stringify({reply:'有效正文',memory})),/不完整/);
+  assert.throws(()=>decodeReply('{"reply":"unfinished'),/不完整/);
+  const value=decodeReply('```json\n{"reply":"","actions":[{"tool":"qq_get_unread_messages","args":{}}]}\n```');
+  assert.deepEqual(value.memory,[]);assert.equal(value.actions[0].tool,'qq_get_unread_messages');
 });
 
 test('failed second QQ delivery is recorded and stops later parts without resending earlier ones',async t=>{

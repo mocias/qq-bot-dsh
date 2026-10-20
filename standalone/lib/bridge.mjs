@@ -86,6 +86,7 @@ export class Bridge {
   configFor(route){const config=this.voiceProfiles.resolve(resolveChatConfig(this.config,route),route.key);return {...config,memoryContextActive:!config.memoryActiveOnly||this.state.lastActiveKey===route.key};}
   scope(route){const config=this.configFor(route),preset=route.group?config.groupPreset:config.privatePreset;return createHash('sha256').update(config.dshUrl+'|'+preset+'|'+route.key+(this.state.memoryEpochs?.[route.key]?'|'+this.state.memoryEpochs[route.key]:'')).digest('hex');}
   reportError(message){this.status.lastError=message;this.systemLog?.record('bridge.error',{component:'qq',level:'error'});}
+  flow(event,route,extra={}){this.systemLog?.record(event,{component:'flow',chat:route?.key,...extra});}
   summary(){return Object.values(this.state.sessions).filter(s=>s.route).map(s=>({key:s.route.key,sessionId:s.id,title:s.title,blocked:s.blocked,
     compactions:s.life?.compactions.length??0,pendingCompactions:s.life?.compactions.filter(c=>!s.life.digestedIds.includes(c.id)).length??0,
     lastDigest:this.memory(s.route.key).state.lastDigest||null,maintenance:this.maintenance.has(s.route.key),lastActivity:s.life?.lastAt}));}
@@ -132,6 +133,7 @@ export class Bridge {
     }
     if(this.jobs.size||this.queues.size||this.maintenance.size||this.outbox.size)throw Error('上一轮任务正在退出，请稍后启动');
     this.config = structuredClone(config); this.dsh = new this.Dsh(config);
+    this.dsh.systemLog=this.systemLog;
     const generation = ++this.generation; this.status = { state: 'connecting', active: this.status.active, lastError: '',channels:{private:selected.includes('private'),group:selected.includes('group')} };
     try {
       checkPresets(await this.dsh.probe());
@@ -186,7 +188,10 @@ export class Bridge {
   }
   receive(event, generation) {
     if (generation !== this.generation || this.status.state !== 'running') return;
-    if(!this.enabled({group:event.post_type==='message'?event.message_type==='group':!!event.group_id}))return;
+    if(!this.enabled({group:event.post_type==='message'?event.message_type==='group':!!event.group_id})){
+      if(event.post_type==='message'&&routeMessage(event,this.config,true))this.flow('input.channel_disabled');
+      return;
+    }
     if(event.post_type==='notice'&&event.notice_type==='notify'&&event.sub_type==='poke'){
       const bot=String(event.self_id),group=!!event.group_id,id=String(group?event.group_id:event.user_id),key=bot+'/'+(group?'group':'private')+'/'+id;
       if(bot!==(this.status.account||this.config.botQQ)||String(event.target_id)!==bot||String(event.user_id)===bot||!(group?this.config.groups:this.config.privateUsers).includes(id))return;
@@ -199,14 +204,16 @@ export class Bridge {
         _poke:true,message:[...(group?[{type:'at',data:{qq:bot}}]:[]),{type:'text',data:{text:'[对方拍了拍你]'}}]};
     }
     const route = routeMessage(event, this.config,true); if (!route || !this.enabled(route)||this.state.seen.includes(route.messageId)) return;
+    this.status.lastObservedAt=new Date(this.now()).toISOString();
+    this.flow('input.observed',route);
     if(event._poke){route.qqMessageId=null;route.poke=true;}
     const effective=this.configFor(route);
     if(effective.messageToolsEnabled){
       const item=this.inbox(route.key).append({messageId:route.qqMessageId,sourceId:route.messageId,sender:route.sender,text:route.text,replyTo:route.replyId,kind:route.poke?'poke':'message'});
       route.inboxSeq=item.seq;
     }
-    if(route.ambient&&!effective.groupAmbientEnabled){this.state.seen.push(route.messageId);this.persist();return;}
-    if(!route.needsReplyCheck&&!this.participation(route.key).onInput(route,effective)){this.state.seen.push(route.messageId);this.persist();return;}
+    if(route.ambient&&!effective.groupAmbientEnabled){this.flow('input.mention_required',route);this.state.seen.push(route.messageId);this.persist();return;}
+    if(!route.needsReplyCheck&&!this.participation(route.key).onInput(route,effective)){this.flow('input.diving',route);this.state.seen.push(route.messageId);this.persist();return;}
     this.systemLog?.record('message.accepted',{component:'qq'});
     route.epoch=this.epochs.get(route.key)??0;
     this.epochs.set(route.key,route.epoch);
@@ -378,11 +385,15 @@ export class Bridge {
   bufferAmbient(route,generation){
     const config=this.configFor(route);
     if(!config.groupAmbientEnabled||!this.participation(route.key).allowsBackground(config))return;
+    this.flow('ambient.buffered',route,{durationMs:config.groupAmbientDelaySeconds*1000});
     let entry=this.ambient.get(route.key);
     if(!entry){entry={routes:[]};this.ambient.set(route.key,entry);entry.timer=setTimeout(()=>{
       this.ambient.delete(route.key);if(generation!==this.generation||!this.participation(route.key).allowsBackground(this.configFor(route)))return;
       const last=this.ambientAttempts[route.key]??0;
-      if(this.now()-last<config.groupAmbientMinMinutes*60000||this.jobs.has(route.key)||this.queues.has(route.key)||this.maintenance.has(route.key))return;
+      const remaining=config.groupAmbientMinMinutes*60000-(this.now()-last);
+      if(remaining>0){this.flow('ambient.cooldown',route,{durationMs:remaining,count:entry.routes.length});return;}
+      if(this.jobs.has(route.key)||this.queues.has(route.key)||this.maintenance.has(route.key)){this.flow('ambient.busy',route,{count:entry.routes.length});return;}
+      this.flow('ambient.submitted',route,{count:entry.routes.length});
       this.ambientAttempts[route.key]=this.now();this.persist();
       const routes=entry.routes,lastRoute=routes.at(-1);
       this.accept({...lastRoute,text:routes.map(r=>r.sender+': '+r.text).join('\n').slice(-12000),segments:routes.flatMap(r=>r.segments).slice(0,100),inboxSeqs:routes.map(r=>r.inboxSeq),evidenceIds:routes.map(r=>r.messageId)},generation);
@@ -397,7 +408,7 @@ export class Bridge {
     let reply;
     try{
       if(name==='help')reply='/help 帮助 · /status 状态 · /id 标识 · /ver 版本 · /stop 停止并丢弃待处理消息 · /new 新会话 · /steer 内容 插话 · /session 历史列表 · /workspace 当前工作区 · /preset 当前预设 · /memory 记忆概览 · /doctor 本聊天检查。模型、权限和预设切换请在本机 DSH 配置。';
-      else if(name==='ver')reply='QQ 独立服务 0.13.1';
+      else if(name==='ver')reply='QQ 独立服务 0.13.2';
       else if(name==='stop'){
         this.epochs.set(route.key,(this.epochs.get(route.key)??0)+1);
         const ambient=this.ambient.get(route.key);if(ambient){clearTimeout(ambient.timer);this.ambient.delete(route.key);}
@@ -443,12 +454,12 @@ export class Bridge {
       if(!actions.includes(plan.action)||String(plan.params[route.group?'group_id':'user_id'])!==route.id)throw Error('发送操作或目标无效');
       if(route.group){
         const times=(this.state.groupSendTimes[route.key]??[]).filter(at=>this.now()-at<3600000);
-        if(config.groupMaxRepliesPerHour>0&&times.length>=config.groupMaxRepliesPerHour)return false;
+        if(config.groupMaxRepliesPerHour>0&&times.length>=config.groupMaxRepliesPerHour){this.flow('delivery.hourly_limit',route,{count:times.length});return false;}
         const gap=times.length?config.groupMinReplyGapSeconds*1000-(this.now()-times.at(-1)):0;
         // Wait only before transport; never retry a call with an uncertain result.
         // Release the outbox while waiting so scheduled reminders are not behind a bubble timer.
-        if(gap>0&&route.trigger!=='schedule')return {waitMs:gap};
-        if(!groupRateAllowed(times,config,this.now()))return false;
+        if(gap>0&&route.trigger!=='schedule'){this.flow('delivery.gap',route,{durationMs:gap});return {waitMs:gap};}
+        if(!groupRateAllowed(times,config,this.now())){this.flow('delivery.rate_limit',route);return false;}
         times.push(this.now());this.state.groupSendTimes[route.key]=times;
       }
       if(plan.action.endsWith('_poke')){

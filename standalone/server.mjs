@@ -20,11 +20,12 @@ import {policyView,policyRevision,resolveChatConfig} from './lib/chat-policy.mjs
 import {syncNapcat} from './lib/napcat-sync.mjs';
 import {QQControl} from './lib/qq-control.mjs';
 import {SystemLog} from './lib/system-log.mjs';
+import {DiagnosticLogs,redactLog} from './lib/diagnostic-logs.mjs';
 import {recoverMemoryReset,resetMemories} from './lib/reset-memory.mjs';
 import {VoiceProfiles} from './lib/voice-profiles.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-export function createApp({ root = path.dirname(here), runtime = path.join(here,'.runtime'), voice: injectedVoice, bridge: injectedBridge, qqControl: injectedControl } = {}) {
+export function createApp({ root = path.dirname(here), runtime = path.join(here,'.runtime'), voice: injectedVoice, bridge: injectedBridge, qqControl: injectedControl, diagnosticOptions } = {}) {
   const configFile=path.join(runtime,'config.private.json');
   let config=validate(readJson(configFile, defaults));
   recoverMemoryReset(runtime);
@@ -33,6 +34,7 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
   bridge.systemLog=systemLog;
   const desktop=new DesktopQQ(runtime),management=new Management(runtime);
   const qqControl=injectedControl||new QQControl();
+  const diagnosticLogs=new DiagnosticLogs(runtime,qqControl,diagnosticOptions);
   const voiceProfiles=new VoiceProfiles(runtime);
   function profilePayload(){const state=voiceProfiles.read();return {...state,profiles:state.profiles.map(p=>({...p,status:voice.status({...config,...p.settings})}))};}
   function checkProfile(settings){if(settings.voiceProvider==='mimo'&&settings.mimoTtsMode==='clone')voice.reference(settings.mimoReferenceId);}
@@ -106,6 +108,9 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
       }
       if (req.method==='GET' && url.pathname==='/api/status') { json(res,200,{config:publicConfig(config),voice:voice.status(config),bridge:bridge.status,lifecycle:bridge.summary?.()??[],imports:importedStores(runtime)}); return; }
       if(req.method==='GET'&&url.pathname==='/api/logs'){json(res,200,systemLog.read({level:url.searchParams.get('level')??'',component:url.searchParams.get('component')??''}));return;}
+      if(req.method==='GET'&&url.pathname==='/api/logs/related'){
+        json(res,200,{...diagnosticLogs.read(config),flow:systemLog.read({component:'flow'}),dshEvents:systemLog.read({component:'dsh'}),status:{state:bridge.status.state,channels:bridge.status.channels,lastObservedAt:bridge.status.lastObservedAt,lastReceivedAt:bridge.status.lastReceivedAt,lastSentAt:bridge.status.lastSentAt,lastError:redactLog(bridge.status.lastError||'',diagnosticLogs.secrets(config))}});return;
+      }
       if(req.method==='GET'&&url.pathname==='/api/chat-policy'){
         const scope=url.searchParams.get('scope')??'private';checkPolicyScope(scope);
         json(res,200,policyPayload(scope));return;
@@ -269,7 +274,7 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
   });
   server.requestTimeout=200000; server.headersTimeout=10000;
   server.on('listening',()=>systemLog.record('service.started'));
-  server.on('close',()=>systemLog.record('service.stopped'));
+  server.on('close',()=>{diagnosticLogs.close();systemLog.record('service.stopped');});
   server.on('error',()=>systemLog.record('service.error',{level:'error'}));
   return {server, bridge, token, runtime, loginUrl:()=>`http://127.0.0.1:${server.address().port}/login?token=${token}`};
 }

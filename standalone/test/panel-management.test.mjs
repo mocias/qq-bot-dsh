@@ -13,8 +13,65 @@ import {MemoryStore,preparePrompt} from '../lib/memory.mjs';
 import {Bridge} from '../lib/bridge.mjs';
 import {Proactive} from '../lib/proactive.mjs';
 import {initializeLife} from '../lib/lifecycle.mjs';
+import {scopeOf} from '../lib/memory.mjs';
+import {Knowledge} from '../lib/knowledge.mjs';
+import {SystemLog} from '../lib/system-log.mjs';
+import {recoverMemoryReset} from '../lib/reset-memory.mjs';
 function temp(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'qq-panel-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
 function wav(){const b=Buffer.alloc(364);b.write('RIFF');b.writeUInt32LE(356,4);b.write('WAVEfmt ',8);b.writeUInt32LE(16,16);b.writeUInt16LE(1,20);b.writeUInt16LE(1,22);b.writeUInt32LE(16000,24);b.writeUInt32LE(32000,28);b.writeUInt16LE(2,32);b.writeUInt16LE(16,34);b.write('data',36);b.writeUInt32LE(320,40);return b;}
+test('memory reset archives only requested scope, invalidates old sessions and creates a fresh workspace epoch',async t=>{
+ const {api,app,runtime}=await panel(t),key='100000001/private/100000002',other='100000001/group/100000003',historic='100000009/private/100000002';
+ await api('/api/config',{botQQ:'100000001',privateUsers:['100000002'],groups:['100000003']});
+ for(const k of [key,other,historic]){
+  const data=(await api('/api/manage/open',{kind:k.split('/')[1],id:k.split('/')[2]})).data;
+  const store=new MemoryStore(runtime,k);fs.writeFileSync(store.safe('SOUL.md'),'private persona '+k);
+  store.commit([{action:'write',page:'user/test.md',text:'# secret old memory',reason:'test',evidence:['test']}],{id:'test',evidenceIds:['test']});
+ }
+ new Knowledge(runtime,key).learn([{term:'testing',meaning:'meaning',evidence:['test']}],['test']);
+ app.bridge.config=validate({botQQ:'100000001'});const route={key,id:'100000002',group:false},oldScope=app.bridge.scope(route);
+ app.bridge.state.sessions[oldScope]={id:'old-session',route,life:{compactions:[],digestedIds:[]}};
+ app.bridge.state.retired=[{id:'old-retired',route}];app.bridge.persist();
+ const before=(await api('/api/manage')).data;assert.ok(before.connectedKeys.includes(key));assert.ok(!before.connectedKeys.includes(historic));assert.ok(before.keys.includes(historic));
+ assert.equal((await api('/api/manage/reset',{scope:key,confirm:'bad'})).status,400);
+ app.bridge.status.state='running';assert.equal((await api('/api/manage/reset',{scope:key,confirm:'RESET '+key})).status,400);app.bridge.status.state='stopped';
+ const result=await api('/api/manage/reset',{scope:key,confirm:'RESET '+key});assert.equal(result.status,200);assert.equal(result.data.count,1);
+ assert.equal(new MemoryStore(runtime,key).pages().length,0);assert.equal(new Knowledge(runtime,key).read().slang.length,0);
+ assert.ok(!fs.readFileSync(new MemoryStore(runtime,key).safe('SOUL.md'),'utf8').includes('private persona'));
+ assert.equal(new MemoryStore(runtime,other).pages().length,1);assert.equal(new MemoryStore(runtime,historic).pages().length,1);
+ assert.notEqual(app.bridge.scope(route),oldScope);assert.equal(Object.keys(app.bridge.state.sessions).length,0);assert.equal(app.bridge.state.retired.length,0);
+ assert.ok(fs.existsSync(path.join(runtime,'memory-reset-backups',result.data.backupId,'memories',scopeOf(key),'user/test.md')));
+ assert.equal((await api('/api/manage/reset',{scope:'account',confirm:'RESET 100000001'})).status,200);
+ assert.equal(new MemoryStore(runtime,other).pages().length,0);assert.equal(new MemoryStore(runtime,historic).pages().length,1);
+});
+test('unfinished reset is rolled back before loading bridge state',t=>{
+ const runtime=temp(t),key='100000001/private/100000002',store=new MemoryStore(runtime,key),source='memories/'+scopeOf(key),backup='memory-reset-backups/test/'+source;
+ fs.writeFileSync(store.safe('SOUL.md'),'must survive');
+ const before={sessions:{preserved:{id:'old'}},retired:[]};writeJson(path.join(runtime,'memory-reset.pending.json'),{phase:'pending',before,moves:[{source,backup}]});
+ fs.mkdirSync(path.dirname(path.join(runtime,backup)),{recursive:true});fs.renameSync(path.join(runtime,source),path.join(runtime,backup));
+ recoverMemoryReset(runtime);assert.equal(fs.readFileSync(store.safe('SOUL.md'),'utf8'),'must survive');
+ assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runtime,'bridge.private.json'))),before);
+});
+test('system logs persist, filter and rotate without recording credentials or arbitrary payloads',async t=>{
+ const {api,app,runtime,origin}=await panel(t);
+ assert.equal((await fetch(origin+'/api/logs')).status,401);
+ await api('/api/voice/config',{mimoApiKey:'SECRET-NEVER-LOG'});
+ app.bridge.reportError('SECRET-CHAT-CONTENT Bearer SECRET-NEVER-LOG');
+ const data=(await api('/api/logs?level=error')).data;
+ assert.ok(data.entries.some(e=>e.event==='bridge.error'));
+ const text=fs.readFileSync(path.join(runtime,'logs','system.jsonl'),'utf8');assert.ok(!text.includes('SECRET-'));assert.ok(!text.includes(app.token));
+ const log=new SystemLog(runtime);assert.ok(log.read().entries.length);
+ fs.writeFileSync(log.file,' '.repeat(1024*1024+1));log.record('test.rotation');assert.ok(fs.existsSync(log.file+'.1'));assert.equal(log.read().entries.at(-1).event,'test.rotation');
+});
+test('timer participation yields both before and during candidate selection to buffered group messages',async t=>{
+ const runtime=temp(t),bridge=new Bridge(runtime),key='100000001/group/100000003',route={key,id:'100000003',group:true};
+ bridge.config=validate({botQQ:'100000001',groups:['100000003']});bridge.status.state='running';bridge.media.prune=()=>{};bridge.syncReminders=()=>{};bridge.sweep=async()=>{};
+ const session={id:'s',route,life:{version:0},blocked:false};bridge.state.sessions[bridge.scope(route)]=session;
+ let calls=0,reserved=0;
+ bridge.proactive.candidate=async()=>{calls++;bridge.ambient.set(key,{routes:[]});return {reserve:()=>reserved++,route};};
+ bridge.ambient.set(key,{routes:[]});await bridge.tick();assert.equal(calls,0);
+ bridge.ambient.clear();await bridge.tick();assert.equal(calls,1);assert.equal(reserved,0);
+ bridge.ambient.clear();bridge.stop();
+});
 async function panel(t){
  const runtime=temp(t),voice=new VoiceService(runtime,runtime),qqControl={status:async config=>({expectedAccount:config.botQQ,message:'mock-online'}),qrcode:async()=>({image:'data:image/png;base64,test'}),contacts:async()=>({items:[]})};
  const app=createApp({runtime,voice,qqControl});app.server.listen(0,'127.0.0.1');await once(app.server,'listening');

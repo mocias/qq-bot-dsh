@@ -196,8 +196,10 @@ export class Media {
     let reply=parsed.reply??'',segments=[];
     const tagged=reply.match(/^\s*\[\[qq_voice\]\]([\s\S]+)\[\[\/qq_voice\]\]\s*$/);
     const voiceText=q.voice??tagged?.[1]??reply;
-    const policy={...voiceDefaults,enabled:config.qqVoiceSend,mode:config.voiceReplyMode,quietHours:{start:config.voiceQuietStart,end:config.voiceQuietEnd}};
-    if((!route.group||config.groupVoiceSend)&&(q.voice||tagged||config.voiceReplyMode==='voice')&&!textReason(voiceText,policy,new Date(this.now()))){
+    const policy={...voiceDefaults,enabled:config.qqVoiceSend,mode:config.voiceReplyMode,quietHours:config.voiceQuietMode==='never'?{start:0,end:0}:{start:config.voiceQuietStart,end:config.voiceQuietEnd}};
+    const hour=Number(new Intl.DateTimeFormat('en-GB',{hour:'2-digit',hourCycle:'h23',timeZone:'Asia/Shanghai'}).format(new Date(this.now())));
+    const quiet=config.voiceQuietMode==='always'||(config.voiceQuietMode!=='never'&&(config.voiceQuietStart<config.voiceQuietEnd?hour>=config.voiceQuietStart&&hour<config.voiceQuietEnd:config.voiceQuietStart>config.voiceQuietEnd&&(hour>=config.voiceQuietStart||hour<config.voiceQuietEnd)));
+    if(!quiet&&(!route.group||config.groupVoiceSend)&&(q.voice||tagged||config.voiceReplyMode==='voice')&&!textReason(voiceText,policy,new Date(this.now()))){
       try{
         const result=await this.voice.synthesize(voiceText,config),data=this.voice.audio(result.id),info=wavInfo(data);
         if(info.duration_seconds>60||data.length>MAX)throw Error('语音过长');

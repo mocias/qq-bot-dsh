@@ -16,7 +16,7 @@ export const defaults = {
   memoryAutoInject:true,memoryRegisterSkill:true,memoryActiveOnly:false,memoryBootMaxChars:6000,memoryPageMaxChars:10000,proactiveMaxPerSession:0,
   rotationEnabled: true, privateMessagePolicy: 'steer', groupMessagePolicy: 'queue',
   qqImages: true, qqForward: true, qqVoiceReceive: true, qqVoiceSend: true,
-  qqMediaRoots: [], ffmpegPath: '', voiceReplyMode: 'auto', voiceQuietStart: 23, voiceQuietEnd: 8,
+  qqMediaRoots: [], ffmpegPath: '', voiceReplyMode: 'auto', voiceQuietMode:'scheduled', voiceQuietStart: 23, voiceQuietEnd: 8,
   recallEnabled: false, recallMinMinutes: 30, recallMaxMinutes: 120, recallMaxPerDay: 3,
   groupProactiveEnabled: false, groupProactiveMinMinutes: 30, groupProactiveMaxMinutes: 120, groupProactiveMaxPerDay: 3,
   groupMinReplyGapSeconds: 0, groupMaxRepliesPerHour: 0,
@@ -75,6 +75,7 @@ export function validate(input, previous = defaults) {
   for(const field of ['privateMessagePolicy','groupMessagePolicy']) if(!['queue','steer'].includes(out[field])) throw Error('请选择排队或插话');
   if (!['Microsoft Huihui Desktop', 'Microsoft Zira Desktop'].includes(out.voice)) throw Error('请选择已支持的本地声音');
   if(!['auto','text','voice'].includes(out.voiceReplyMode))throw Error('语音回复模式无效');
+  if(!['scheduled','always','never'].includes(out.voiceQuietMode))throw Error('语音安静模式无效');
   for(const f of ['proactiveStart','proactiveEnd'])if(!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(out[f]))throw Error('主动消息时段格式应为 HH:mm');
   if(out.recallMaxMinutes<out.recallMinMinutes||out.groupProactiveMaxMinutes<out.groupProactiveMinMinutes)throw Error('最长间隔不能小于最短间隔');
   for (const field of ['privatePreset', 'groupPreset']) if (out[field].length > 200) throw Error('预设名称过长');

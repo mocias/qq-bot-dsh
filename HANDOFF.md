@@ -12,7 +12,9 @@
 
 `QQ / NapCat OneBot v11 → standalone Node 服务 → DSH Web API → DSH Agent / 模型`
 
-`standalone/` 是独立进程，不安装为 DSH 插件；DSH 仍必须另行运行。协议参考 qq-bridge 的 `a56164e70a0521a7829138a42eee76066fde2b8b` 版本，没有引入其完整业务运行时。当前 standalone 版本为 0.8.1。
+`standalone/` 是独立进程，不安装为 DSH 插件；DSH 仍必须另行运行。协议参考 qq-bridge 的 `a56164e70a0521a7829138a42eee76066fde2b8b` 版本，没有引入其完整业务运行时。当前 standalone 版本为 0.9.0。
+
+0.9 增加已接入聊天下拉选择、默认隐藏未接入资料、带私有备份的聊天/账号记忆重置、明确的语音安静模式和运行日志页；说明书仅占位。重置会隔离旧 DSH 会话与工作区，保留历史文件；详见 `docs/PANEL-0.9.md`。
 
 0.8.1 提供 Windows `打开面板.cmd`，从本机启动记录读取当前登录链接，复用有效服务或隐藏启动后打开浏览器；未认证首页改为说明页，API 仍返回 401，不将登录令牌公开给未认证请求。登录 Cookie 按端口命名，避免测试面板覆盖正式面板的浏览器登录。发布部署的入口使用当前 `start-latest.ps1`，升级后保持可用。
 

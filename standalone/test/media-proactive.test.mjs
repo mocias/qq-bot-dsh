@@ -51,7 +51,7 @@ test('sender paths and URL-shaped file IDs cannot ask OneBot to read arbitrary m
   assert.equal(calls,0);assert.equal(result.images.length,0);assert.deepEqual(result.mediaFailures,['image','record']);
 });
 test('outgoing image, merged-forward and voice follow original envelopes and fallback only before send',async t=>{
-  const root=temp(t),media=new Media(root,{call:async()=>{},download:async()=>png,voice:{synthesize:async()=>({id:'audio'}),audio:()=>wav()}});
+  const root=temp(t),media=new Media(root,{now:()=>Date.parse('2026-10-20T04:00:00Z'),call:async()=>{},download:async()=>png,voice:{synthesize:async()=>({id:'audio'}),audio:()=>wav()}});
   const session={workspace:root};
   const image=await media.outgoing({reply:'图',qq:{images:['https://images.example.org/a']}},route,session,defaults);
   assert.equal(image.action,'send_private_msg');assert.equal(image.params.user_id,route.id);assert.match(image.params.message[1].data.file,/^base64:\/\//);
@@ -65,6 +65,17 @@ test('outgoing image, merged-forward and voice follow original envelopes and fal
   const quiet=await media.outgoing({reply:'[[qq_voice]]你好[[/qq_voice]]'},route,session,{...defaults,voiceReplyMode:'text'});
   assert.equal(quiet.params.message[0].data.text,'你好');
   await assert.rejects(media.outgoing({reply:'',qq:{images:[],user_id:'another'}},route,session,defaults),/格式/);
+});
+test('quiet modes support all-day silence, unrestricted hours and overnight scheduled silence',async t=>{
+ const root=temp(t);let now=Date.parse('2026-10-20T16:00:00Z'),calls=0;
+ const media=new Media(root,{now:()=>now,voice:{synthesize:async()=>{calls++;return {id:'audio'};},audio:()=>wav()}});
+ const send=mode=>media.outgoing({reply:'',qq:{voice:'你好'}},route,{workspace:root},{...defaults,voiceReplyMode:'voice',voiceQuietMode:mode});
+ assert.equal((await send('scheduled')).params.message[0].type,'text');
+ assert.equal((await send('never')).params.message[0].type,'record');
+ assert.equal((await send('always')).params.message[0].type,'text');
+ now=Date.parse('2026-10-20T04:00:00Z');assert.equal((await send('scheduled')).params.message[0].type,'record');assert.equal(calls,2);
+ assert.throws(()=>validate({voiceQuietMode:'bad'}));
+ const cfg=validate({chatPolicy:{group:{voiceQuietMode:'always'},overrides:{'123456/group/234567':{voiceQuietMode:'never'}}}});assert.equal(cfg.chatPolicy.group.voiceQuietMode,'always');
 });
 test('original recall scheduler persists reservations, caps daily attempts and waits for real activity',async t=>{
   const root=temp(t);let now=Date.parse('2026-10-20T02:00:00Z');

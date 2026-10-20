@@ -12,3 +12,5 @@
 dialog{border:1px solid #d4dfd3;border-radius:14px;padding:28px;max-width:520px;color:#22302f}dialog::backdrop{background:#142c2566}dialog p{font-size:14px;line-height:1.8}#notice{position:sticky;top:12px;z-index:10}
 .graph-node text{pointer-events:auto}
 .memory-canvas{height:auto;aspect-ratio:560 / 340}
+#system-logs{max-height:560px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#162a24;color:#d8eee2;padding:20px;border-radius:10px;font-size:12px;line-height:1.9}
+.policy-row p{font-size:13px;line-height:1.7;color:#667b70;margin:10px 0}

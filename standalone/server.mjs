@@ -9,7 +9,7 @@ import { Bridge } from './lib/bridge.mjs';
 import { DshClient } from './lib/dsh.mjs';
 import { importedStores } from './lib/import-memory.mjs';
 import { probeQQ } from './lib/onebot.mjs';
-import { MemoryStore } from './lib/memory.mjs';
+import { MemoryStore,scopeOf } from './lib/memory.mjs';
 import {Management} from './lib/management.mjs';
 import {Knowledge} from './lib/knowledge.mjs';
 import {publicDownload} from './lib/media.mjs';
@@ -19,15 +19,20 @@ import { DesktopQQ } from './lib/desktop-qq.mjs';
 import {policyView,policyRevision,resolveChatConfig} from './lib/chat-policy.mjs';
 import {syncNapcat} from './lib/napcat-sync.mjs';
 import {QQControl} from './lib/qq-control.mjs';
+import {SystemLog} from './lib/system-log.mjs';
+import {recoverMemoryReset,resetMemories} from './lib/reset-memory.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export function createApp({ root = path.dirname(here), runtime = path.join(here,'.runtime'), voice: injectedVoice, bridge: injectedBridge, qqControl: injectedControl } = {}) {
   const configFile=path.join(runtime,'config.private.json');
   let config=validate(readJson(configFile, defaults));
+  recoverMemoryReset(runtime);
+  const systemLog=new SystemLog(runtime);
   const voice=injectedVoice || new VoiceService(root,runtime), bridge=injectedBridge || new Bridge(runtime,{voice});
+  bridge.systemLog=systemLog;
   const desktop=new DesktopQQ(runtime),management=new Management(runtime);
   const qqControl=injectedControl||new QQControl();
-  let napcatSyncBusy=false;
+  let napcatSyncBusy=false,managementNetwork=0;
   async function syncInterface(){
     idleConfig();napcatSyncBusy=true;
     try{return await syncNapcat(config,runtime);}finally{napcatSyncBusy=false;}
@@ -95,6 +100,7 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         const [type,file]=assets.get(url.pathname); res.writeHead(200,{'Content-Type':type}); res.end(fs.readFileSync(path.join(here,'public',file))); return;
       }
       if (req.method==='GET' && url.pathname==='/api/status') { json(res,200,{config:publicConfig(config),voice:voice.status(config),bridge:bridge.status,lifecycle:bridge.summary?.()??[],imports:importedStores(runtime)}); return; }
+      if(req.method==='GET'&&url.pathname==='/api/logs'){json(res,200,systemLog.read({level:url.searchParams.get('level')??'',component:url.searchParams.get('component')??''}));return;}
       if(req.method==='GET'&&url.pathname==='/api/chat-policy'){
         const scope=url.searchParams.get('scope')??'private';checkPolicyScope(scope);
         json(res,200,policyPayload(scope));return;
@@ -116,7 +122,7 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         json(res,200,{keys,detail:key?new MemoryStore(runtime,key).inspect():null});return;
       }
       if(req.method==='GET'&&url.pathname==='/api/manage'){
-        const key=url.searchParams.get('key');json(res,200,{keys:keys(),currentBot:config.botQQ,...(key?managed(key):{})});return;
+        const key=url.searchParams.get('key'),allKeys=keys();json(res,200,{keys:allKeys,storedKeys:allKeys.filter(k=>fs.existsSync(path.join(runtime,'memories',scopeOf(k),'.runtime','store.json'))),connectedKeys:policyScopes().filter(x=>x.includes('/')),currentBot:config.botQQ,...(key?managed(key):{})});return;
       }
       if(req.method==='GET'&&url.pathname==='/api/sticker/image'){
         const key=url.searchParams.get('key');checkKey(key);const item=new Knowledge(runtime,key).sticker(url.searchParams.get('id'));
@@ -127,6 +133,19 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
       }
       if (req.method!=='POST') { json(res,404,{error:'页面不存在'}); return; }
       const input=await body(req);
+      const started=Date.now();
+      res.once('finish',()=>systemLog.record(res.statusCode<400?'operation.completed':'operation.failed',{level:res.statusCode<400?'info':'error',component:url.pathname.includes('/voice/')?'voice':url.pathname.includes('/qq/')||url.pathname.includes('/bridge/')?'qq':url.pathname.includes('/manage/')?'memory':'panel',operation:url.pathname,durationMs:Date.now()-started}));
+      if(url.pathname==='/api/manage/reset'){
+        idleConfig();
+        if(managementNetwork)throw Error('正在进行资料查询或收藏操作，请完成后重置');
+        const scope=input.scope;
+        if(scope!=='account')checkKey(scope,true);
+        if(input.confirm!==`RESET ${scope==='account'?config.botQQ:scope}`)throw Error('请先确认重置范围');
+        const selected=scope==='account'?keys().filter(key=>key.split('/')[0]===config.botQQ):[scope];
+        const result=resetMemories(runtime,bridge,selected);
+        systemLog.record('memory.reset',{component:'memory',count:result.count});
+        json(res,200,result);return;
+      }
       if(url.pathname==='/api/manage/open'||url.pathname==='/api/chat-target'){
         if(!config.botQQ||!['private','group'].includes(input.kind)||typeof input.id!=='string'||!/^\d{5,20}$/.test(input.id))throw Error('请先配置机器人账号，并填写有效的好友 QQ 或群号');
         const key=config.botQQ+'/'+input.kind+'/'+input.id;
@@ -142,6 +161,7 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         json(res,200,{config:publicConfig(config),key});return;
       }
       if(url.pathname.startsWith('/api/manage/')){
+        if(['/api/manage/research','/api/manage/collect','/api/manage/favorites'].includes(url.pathname)){managementNetwork++;res.once('finish',()=>managementNetwork--);}
         checkKey(input.key,true);const knowledge=new Knowledge(runtime,input.key);
         if(url.pathname==='/api/manage/persona')management.savePersona(input);
         else if(url.pathname==='/api/manage/page')management.savePage(input);
@@ -213,6 +233,9 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
     } catch(error) { json(res,400,{error:error instanceof SyntaxError ? '数据格式不正确' : error.message}); }
   });
   server.requestTimeout=200000; server.headersTimeout=10000;
+  server.on('listening',()=>systemLog.record('service.started'));
+  server.on('close',()=>systemLog.record('service.stopped'));
+  server.on('error',()=>systemLog.record('service.error',{level:'error'}));
   return {server, bridge, token, runtime, loginUrl:()=>`http://127.0.0.1:${server.address().port}/login?token=${token}`};
 }
 if (process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.url)) {

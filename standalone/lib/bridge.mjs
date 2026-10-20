@@ -47,7 +47,7 @@ export class Bridge {
     this.now=now;this.jobs=new Map();this.maintenance=new Map();this.memories=new Map();
     this.state.retired??=[];this.state.rotations??={};
     this.state.groupSendTimes??={};this.state.reminders??=[];
-    this.reminders=new ReminderRelay({reserve:(id,session)=>{const token=(session.backend??this.config.dshUrl)+'/'+id;if(this.state.reminders.includes(token))return false;this.state.reminders.push(token);this.state.reminders=this.state.reminders.slice(-10000);this.persist();return true;},deliver:(session,text,id)=>this.deliverReminder(session,text,id),onError:error=>{this.status.lastError=error.message;}});
+    this.reminders=new ReminderRelay({reserve:(id,session)=>{const token=(session.backend??this.config.dshUrl)+'/'+id;if(this.state.reminders.includes(token))return false;this.state.reminders.push(token);this.state.reminders=this.state.reminders.slice(-10000);this.persist();return true;},deliver:(session,text,id)=>this.deliverReminder(session,text,id),onError:error=>{this.reportError(error.message);}});
     this.media=media??new Media(runtime,{call:(...args)=>this.call(...args),voice:voice??new VoiceService(path.resolve(runtime,'../..'),runtime),now});
     this.proactive=proactive??new Proactive(runtime,{now});this.backgrounds=new Map();
     for(const session of Object.values(this.state.sessions)){
@@ -65,12 +65,14 @@ export class Bridge {
   }
   memory(key){if(!this.memories.has(key))this.memories.set(key,new MemoryStore(this.runtime,key));return this.memories.get(key);}
   configFor(route){const config=resolveChatConfig(this.config,route);return {...config,memoryContextActive:!config.memoryActiveOnly||this.state.lastActiveKey===route.key};}
-  scope(route){const config=this.configFor(route),preset=route.group?config.groupPreset:config.privatePreset;return createHash('sha256').update(config.dshUrl+'|'+preset+'|'+route.key).digest('hex');}
+  scope(route){const config=this.configFor(route),preset=route.group?config.groupPreset:config.privatePreset;return createHash('sha256').update(config.dshUrl+'|'+preset+'|'+route.key+(this.state.memoryEpochs?.[route.key]?'|'+this.state.memoryEpochs[route.key]:'')).digest('hex');}
+  reportError(message){this.status.lastError=message;this.systemLog?.record('bridge.error',{component:'qq',level:'error'});}
   summary(){return Object.values(this.state.sessions).filter(s=>s.route).map(s=>({key:s.route.key,sessionId:s.id,blocked:s.blocked,
     compactions:s.life?.compactions.length??0,pendingCompactions:s.life?.compactions.filter(c=>!s.life.digestedIds.includes(c.id)).length??0,
     lastDigest:this.memory(s.route.key).state.lastDigest||null,maintenance:this.maintenance.has(s.route.key),lastActivity:s.life?.lastAt}));}
   persist() { this.state.seen = this.state.seen.slice(-10000); this.state.deliveries = this.state.deliveries.slice(-200); writeJson(this.file, this.state); }
   async start(config) {
+    this.systemLog?.record('bridge.start.requested',{component:'qq'});
     if (this.status.state !== 'stopped') throw Error('请先停止当前连接');
     for(const [kind,ids] of [['private',config.privateUsers],['group',config.groups]])for(const id of ids){
       const effective=resolveChatConfig(config,(config.botQQ||'00000')+'/'+kind+'/'+id);
@@ -91,18 +93,20 @@ export class Bridge {
       socket.on('message', bytes => { let event; try { event=JSON.parse(bytes.toString()); } catch { return; }
         if (event.echo && this.pending.has(event.echo)) { const pending=this.pending.get(event.echo); this.pending.delete(event.echo); pending(event); return; }
         try { this.receive(event, generation); }
-        catch { this.stop(); this.status.lastError='保存消息状态失败，QQ 连接已停止'; }
+        catch { this.stop(); this.reportError('保存消息状态失败，QQ 连接已停止'); }
       });
-      socket.on('error', () => { this.status.lastError='QQ 连接发生错误'; });
-      socket.on('close', () => { if (this.generation === generation) { this.stop(); this.status.lastError='QQ 连接断开，请手动重新启动'; } });
+      socket.on('error', () => { this.reportError('QQ 连接发生错误'); });
+      socket.on('close', () => { if (this.generation === generation) { this.stop(); this.reportError('QQ 连接断开，请手动重新启动'); } });
       const verified=await verifyQQ(socket,config);
       if(generation!==this.generation)throw Error('启动已取消');
       Object.assign(this.status,verified);
       this.status.state = 'running';this.syncReminders();
-      this.timer=setInterval(()=>this.tick().catch(error=>{this.status.lastError=error.message;}),30000);this.timer.unref?.();
-    } catch (error) { if (this.generation === generation) { this.stop(); this.status.lastError=error.message; } throw error; }
+      this.systemLog?.record('bridge.connected',{component:'qq'});
+      this.timer=setInterval(()=>this.tick().catch(error=>{this.reportError(error.message);}),30000);this.timer.unref?.();
+    } catch (error) { if (this.generation === generation) { this.stop(); this.reportError(error.message); } throw error; }
   }
   stop() {
+    this.systemLog?.record('bridge.stopped',{component:'qq'});
     clearInterval(this.timer);this.reminders.close();for(const item of this.ambient.values())clearTimeout(item.timer);this.ambient.clear();for(const job of this.jobs.values())job.controller?.abort();for(const job of this.maintenance.values())job.controller.abort();
     for(const controller of this.backgrounds.values())controller.abort();
     this.generation++; this.socket?.close(); this.dsh?.close();
@@ -112,18 +116,19 @@ export class Bridge {
   receive(event, generation) {
     if (generation !== this.generation || this.status.state !== 'running') return;
     const route = routeMessage(event, this.config); if (!route || this.state.seen.includes(route.messageId)) return;
+    this.systemLog?.record('message.accepted',{component:'qq'});
     route.epoch=this.epochs.get(route.key)??0;
     route.knownReplyIds=this.state.deliveries.filter(d=>d.key===route.key&&d.state==='sent').map(d=>d.qqMessageId);
     if(route.needsReplyCheck){
       this.state.seen.push(route.messageId);this.persist();
-      this.media.reference(route,route.replyId).then(result=>{if(generation!==this.generation)return;if(result.fromBot){route.needsReplyCheck=false;this.dispatch(route,generation);}else if(this.configFor(route).groupAmbientEnabled){route.needsReplyCheck=false;route.ambient=true;this.dispatch(route,generation);}}).catch(error=>{this.status.lastError=error.message;});return;
+      this.media.reference(route,route.replyId).then(result=>{if(generation!==this.generation)return;if(result.fromBot){route.needsReplyCheck=false;this.dispatch(route,generation);}else if(this.configFor(route).groupAmbientEnabled){route.needsReplyCheck=false;route.ambient=true;this.dispatch(route,generation);}}).catch(error=>{this.reportError(error.message);});return;
     }
     this.state.seen.push(route.messageId);this.persist();this.dispatch(route,generation);
   }
   dispatch(route,generation){
     if(generation!==this.generation||route.epoch!==(this.epochs.get(route.key)??0))return;
     const command=route.text.match(/^\/([a-z]+)(?:\s+([\s\S]*))?$/i);
-    if(command&&!route.ambient){if(this.status.active>=20&&command[1].toLowerCase()!=='stop')return;this.status.active++;this.command(route,command,generation).catch(error=>{this.status.lastError=error.message;}).finally(()=>{this.status.active=Math.max(0,this.status.active-1);});return;}
+    if(command&&!route.ambient){if(this.status.active>=20&&command[1].toLowerCase()!=='stop')return;this.status.active++;this.command(route,command,generation).catch(error=>{this.reportError(error.message);}).finally(()=>{this.status.active=Math.max(0,this.status.active-1);});return;}
     if(route.ambient){this.backgrounds.get(route.key)?.abort();this.maintenance.get(route.key)?.controller.abort();this.bufferAmbient(route,generation);return;}
     const buffered=this.ambient.get(route.key);if(buffered){clearTimeout(buffered.timer);this.ambient.delete(route.key);}
     this.accept(route,generation);
@@ -131,7 +136,7 @@ export class Bridge {
   accept(route,generation){
     const config=this.configFor(route);
     this.status.lastReceivedAt=new Date().toISOString();this.status.lastReceivedId=route.messageId;
-    if (this.status.active >= 20) { this.status.lastError='待处理消息已满，本条消息未处理'; return; }
+    if (this.status.active >= 20) { this.reportError('待处理消息已满，本条消息未处理'); return; }
     const session=this.state.sessions[this.scope(route)];if(session){noteArrival(session,this.now());session.lastUserAt=this.now();}
     this.state.lastActiveKey=route.key;
     this.backgrounds.get(route.key)?.abort();
@@ -141,7 +146,7 @@ export class Bridge {
     const job=this.jobs.get(route.key),policy=route.group?config.groupMessagePolicy:config.privateMessagePolicy;
     const operation=job&&!job.background&&!job.toolsActive&&!route.ambient&&!route.hasMedia&&policy==='steer'&&this.dsh.canSteer?.(job.session.id)
       ? this.insert(route,job,generation):this.enqueue(route,generation);
-    operation.catch(error=>{this.status.lastError=error.message;}).finally(()=>{this.status.active=Math.max(0,this.status.active-1);});
+    operation.catch(error=>{this.reportError(error.message);}).finally(()=>{this.status.active=Math.max(0,this.status.active-1);});
   }
   async insert(route,job,generation){
     const config=this.configFor(route);
@@ -153,7 +158,11 @@ export class Bridge {
   }
   enqueue(route,generation){
     const prior = this.queues.get(route.key) || Promise.resolve();
-    const task = prior.catch(() => {}).then(() => this.handle(route, generation)).finally(() => {
+    const task = prior.catch(() => {}).then(async () => {
+      this.systemLog?.record('turn.started',{component:'agent'});
+      try{await this.handle(route,generation);this.systemLog?.record('turn.completed',{component:'agent'});}
+      catch(error){this.systemLog?.record('turn.failed',{component:'agent',level:'error'});throw error;}
+    }).finally(() => {
       if (this.queues.get(route.key) === task) this.queues.delete(route.key);
     });
     this.queues.set(route.key, task);return task;
@@ -247,7 +256,7 @@ export class Bridge {
       });
       try{this.socket.send(JSON.stringify({ ...plan, echo }));}catch{this.pending.get(echo)?.(null);this.pending.delete(echo);}
       const result = await sendResponse;
-      delivery.state = result?.status === 'ok' && result.retcode === 0 ? 'sent' : result ? 'failed' : 'unknown'; this.persist();
+      delivery.state = result?.status === 'ok' && result.retcode === 0 ? 'sent' : result ? 'failed' : 'unknown'; this.persist();this.systemLog?.record('message.'+delivery.state,{component:'qq',level:delivery.state==='sent'?'info':'error'});
       if(delivery.state==='sent'){delivery.qqMessageId=String(result.data?.message_id??'');this.status.lastSentAt=new Date().toISOString();if(route.trigger)session.lastProactiveReply=reply;this.persist();}
       if (delivery.state !== 'sent') throw Error('QQ 发送失败或结果不确定；为避免重复发送，不会自动重试');
       session.blocked=false; this.persist();
@@ -280,7 +289,7 @@ export class Bridge {
     let reply;
     try{
       if(name==='help')reply='/help 帮助 · /status 状态 · /id 标识 · /ver 版本 · /stop 停止并丢弃待处理消息 · /new 新会话 · /steer 内容 插话 · /session 历史列表 · /workspace 当前工作区 · /preset 当前预设 · /memory 记忆概览 · /doctor 本聊天检查。模型、权限和预设切换请在本机 DSH 配置。';
-      else if(name==='ver')reply='QQ 独立服务 0.7.1';
+      else if(name==='ver')reply='QQ 独立服务 0.9.0';
       else if(name==='stop'){
         this.epochs.set(route.key,(this.epochs.get(route.key)??0)+1);
         const ambient=this.ambient.get(route.key);if(ambient){clearTimeout(ambient.timer);this.ambient.delete(route.key);}
@@ -307,7 +316,7 @@ export class Bridge {
     if(!text.trim()||this.status.state!=='running')return;
     if(route.group){const times=(this.state.groupSendTimes[route.key]??[]).filter(at=>this.now()-at<3600000);if(!groupRateAllowed(times,config,this.now()))return;times.push(this.now());this.state.groupSendTimes[route.key]=times;}
     const delivery={key:route.key,messageId:route.messageId,trigger,state:'sending',at:new Date().toISOString()};this.state.deliveries.push(delivery);this.persist();
-    try{const result=await this.call(route.group?'send_group_msg':'send_private_msg',{[route.group?'group_id':'user_id']:route.id,message:[{type:'text',data:{text:text.slice(0,4000)}}]});delivery.state='sent';delivery.qqMessageId=String(result?.message_id??'');}catch(error){delivery.state='unknown';throw error;}finally{this.persist();}
+    try{const result=await this.call(route.group?'send_group_msg':'send_private_msg',{[route.group?'group_id':'user_id']:route.id,message:[{type:'text',data:{text:text.slice(0,4000)}}]});delivery.state='sent';delivery.qqMessageId=String(result?.message_id??'');}catch(error){delivery.state='unknown';throw error;}finally{this.persist();this.systemLog?.record('message.'+delivery.state,{component:'qq',level:delivery.state==='sent'?'info':'error'});}
   }
   syncReminders(){
     if(!this.config||this.status.state!=='running'){this.reminders.close();return;}
@@ -339,11 +348,11 @@ export class Bridge {
       await this.sweep();
       for(const [scope,session]of Object.entries(this.state.sessions)){
         const route=session.route;
-        if(!route||generation!==this.generation||session.blocked||this.status.active>=20||this.queues.has(route.key)||this.jobs.has(route.key)||this.maintenance.has(route.key)||this.scope(route)!==scope)continue;
+        if(!route||generation!==this.generation||session.blocked||this.status.active>=20||this.ambient.has(route.key)||this.queues.has(route.key)||this.jobs.has(route.key)||this.maintenance.has(route.key)||this.scope(route)!==scope)continue;
         if(!(route.group?this.config.groups:this.config.privateUsers).includes(route.id))continue;
         const version=session.life.version,config=this.configFor(route);
         const candidate=await this.proactive.candidate(session,config,this.memory(route.key),{activeKey:this.state.lastActiveKey,groupTimes:this.state.groupSendTimes[route.key],call:(...args)=>this.call(...args)});
-        if(!candidate||generation!==this.generation||version!==session.life.version||this.queues.has(route.key))continue;
+        if(!candidate||generation!==this.generation||version!==session.life.version||this.ambient.has(route.key)||this.queues.has(route.key)||this.jobs.has(route.key)||this.maintenance.has(route.key))continue;
         candidate.reserve(); // reserve before queuing; no replay after a crash or uncertain send
         session.proactiveAttempts=(session.proactiveAttempts??0)+1;this.persist();
         const controller=new AbortController();this.backgrounds.set(route.key,controller);
@@ -363,9 +372,11 @@ export class Bridge {
       const controller=new AbortController(),store=this.memory(route.key);
       const current=()=>generation===this.generation&&this.state.sessions[scope]===session;
       const job={controller};this.maintenance.set(route.key,job);
+      this.systemLog?.record('maintenance.started',{component:'memory'});
       const operation=maintain({session,config,store,dsh:this.dsh,persist:()=>this.persist(),now:this.now,isCurrent:current,signal:controller.signal,
         rotate:(receipt,version)=>this.rotate(scope,session,receipt,version,generation,controller.signal)})
-        .catch(error=>{session.life.retryAt=this.now()+config.memoryIdleMinutes*60000;this.persist();this.status.lastError=error.message;})
+        .then(()=>this.systemLog?.record('maintenance.completed',{component:'memory'}))
+        .catch(error=>{session.life.retryAt=this.now()+config.memoryIdleMinutes*60000;this.persist();this.reportError(error.message);this.systemLog?.record('maintenance.failed',{component:'memory',level:'error'});})
         .finally(()=>{if(this.maintenance.get(route.key)===job)this.maintenance.delete(route.key);if(this.queues.get(route.key)===operation)this.queues.delete(route.key);});
       this.queues.set(route.key,operation);await operation;
     }}finally{this.sweeping=false;}

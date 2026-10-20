@@ -18,13 +18,15 @@ import {publicSearch} from './lib/chat-tools.mjs';
 import { DesktopQQ } from './lib/desktop-qq.mjs';
 import {policyView,policyRevision,resolveChatConfig} from './lib/chat-policy.mjs';
 import {syncNapcat} from './lib/napcat-sync.mjs';
+import {QQControl} from './lib/qq-control.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-export function createApp({ root = path.dirname(here), runtime = path.join(here,'.runtime'), voice: injectedVoice, bridge: injectedBridge } = {}) {
+export function createApp({ root = path.dirname(here), runtime = path.join(here,'.runtime'), voice: injectedVoice, bridge: injectedBridge, qqControl: injectedControl } = {}) {
   const configFile=path.join(runtime,'config.private.json');
   let config=validate(readJson(configFile, defaults));
   const voice=injectedVoice || new VoiceService(root,runtime), bridge=injectedBridge || new Bridge(runtime,{voice});
   const desktop=new DesktopQQ(runtime),management=new Management(runtime);
+  const qqControl=injectedControl||new QQControl();
   let napcatSyncBusy=false;
   async function syncInterface(){
     idleConfig();napcatSyncBusy=true;
@@ -47,6 +49,7 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
       ...config.groups.map(id=>config.botQQ+'/group/'+id)]:[])];
   }
   function checkPolicyScope(scope){if(!policyScopes().includes(scope))throw Error('请先在连接页配置机器人账号和允许的好友或群');}
+  function policyPayload(scope){return {scopes:policyScopes(),overriddenScopes:Object.keys(config.chatPolicy.overrides),...policyView(config,scope)};}
   function idleConfig(){
     if(napcatSyncBusy)throw Error('正在同步 NapCat 接口，请稍候');
     if(bridge.status.state!=='stopped'||bridge.status.active||voice.busy)throw Error('请先停止 QQ 连接并等待语音及消息任务完成，再修改配置');
@@ -57,6 +60,7 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
   }
   const token=randomBytes(32).toString('hex'), cookie=randomBytes(32).toString('hex');
   const assets = new Map([['/', ['text/html; charset=utf-8','index.html']], ['/app.js',['text/javascript; charset=utf-8','app.js']], ['/style.css',['text/css; charset=utf-8','style.css']]]);
+  for(const [url,file] of [['/memory-viewer.js','memory-viewer.js'],['/memory-layout.js','../lib/legacy-memory/graph-layout.js'],['/memory-view.js','../../dsh-plugin-memory-source/lib/graph-view.js']])assets.set(url,['text/javascript; charset=utf-8',file]);
   function json(res,status,value) { res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'}); res.end(JSON.stringify(value)); }
   async function body(req) {
     if (!req.headers['content-type']?.startsWith('application/json')) throw Error('请求需要使用 JSON');
@@ -67,7 +71,7 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
   const server=http.createServer(async (req,res) => {
     res.setHeader('Cache-Control','no-store'); res.setHeader('X-Content-Type-Options','nosniff');
     res.setHeader('Referrer-Policy','no-referrer'); res.setHeader('X-Frame-Options','DENY');
-    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     const origin='http://127.0.0.1:'+server.address().port;
     if (req.headers.host !== new URL(origin).host) { json(res,403,{error:'请使用 127.0.0.1 打开面板'}); return; }
     const url=new URL(req.url,origin);
@@ -86,9 +90,9 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
       if (req.method==='GET' && url.pathname==='/api/status') { json(res,200,{config:publicConfig(config),voice:voice.status(config),bridge:bridge.status,lifecycle:bridge.summary?.()??[],imports:importedStores(runtime)}); return; }
       if(req.method==='GET'&&url.pathname==='/api/chat-policy'){
         const scope=url.searchParams.get('scope')??'private';checkPolicyScope(scope);
-        json(res,200,{scopes:policyScopes(),...policyView(config,scope)});return;
+        json(res,200,policyPayload(scope));return;
       }
-      if(req.method==='GET'&&url.pathname==='/api/voice/references'){json(res,200,{references:voice.listReferences()});return;}
+      if(req.method==='GET'&&url.pathname==='/api/voice/references'){json(res,200,{references:voice.listReferences(),deleted:voice.listReferences({deleted:true})});return;}
       if(req.method==='GET'&&url.pathname.startsWith('/api/voice/reference/')){
         const {meta,bytes}=voice.reference(url.pathname.slice('/api/voice/reference/'.length));
         res.writeHead(200,{'Content-Type':meta.format==='mp3'?'audio/mpeg':'audio/wav','Content-Length':bytes.length});res.end(bytes);return;
@@ -105,7 +109,7 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         json(res,200,{keys,detail:key?new MemoryStore(runtime,key).inspect():null});return;
       }
       if(req.method==='GET'&&url.pathname==='/api/manage'){
-        const key=url.searchParams.get('key');json(res,200,{keys:keys(),...(key?managed(key):{})});return;
+        const key=url.searchParams.get('key');json(res,200,{keys:keys(),currentBot:config.botQQ,...(key?managed(key):{})});return;
       }
       if(req.method==='GET'&&url.pathname==='/api/sticker/image'){
         const key=url.searchParams.get('key');checkKey(key);const item=new Knowledge(runtime,key).sticker(url.searchParams.get('id'));
@@ -116,6 +120,20 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
       }
       if (req.method!=='POST') { json(res,404,{error:'页面不存在'}); return; }
       const input=await body(req);
+      if(url.pathname==='/api/manage/open'||url.pathname==='/api/chat-target'){
+        if(!config.botQQ||!['private','group'].includes(input.kind)||typeof input.id!=='string'||!/^\d{5,20}$/.test(input.id))throw Error('请先配置机器人账号，并填写有效的好友 QQ 或群号');
+        const key=config.botQQ+'/'+input.kind+'/'+input.id;
+        if(url.pathname==='/api/manage/open'){
+          new MemoryStore(runtime,key);
+          json(res,200,{key,...managed(key)});return;
+        }
+        idleConfig();
+        const field=input.kind==='private'?'privateUsers':'groups',values=config[field].filter(x=>x!==input.id);
+        if(!input.remove)values.push(input.id);
+        const policy=structuredClone(config.chatPolicy);if(input.remove)delete policy.overrides[key];
+        const next=validate({[field]:values,chatPolicy:policy},config);writeJson(configFile,next);config=next;
+        json(res,200,{config:publicConfig(config),key});return;
+      }
       if(url.pathname.startsWith('/api/manage/')){
         checkKey(input.key,true);const knowledge=new Knowledge(runtime,input.key);
         if(url.pathname==='/api/manage/persona')management.savePersona(input);
@@ -140,12 +158,12 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         if(input.revision!==policyRevision(config))throw Error('聊天设置已变化，请重新加载后保存');
         const policy=structuredClone(config.chatPolicy);
         if(input.scope==='private'||input.scope==='group')policy[input.scope]=input.reset?{}:input.patch;
-        else if(input.reset)delete policy.overrides[input.scope];
+        else if(input.reset||(input.patch&&typeof input.patch==='object'&&!Array.isArray(input.patch)&&!Object.keys(input.patch).length))delete policy.overrides[input.scope];
         else policy.overrides[input.scope]=input.patch;
         if(!input.reset&&(!input.patch||typeof input.patch!=='object'))throw Error('缺少聊天设置');
         const next=validate({chatPolicy:policy},config);
         writeJson(configFile,next);config=next;
-        json(res,200,{scopes:policyScopes(),...policyView(config,input.scope)});
+        json(res,200,policyPayload(input.scope));
       }else if (url.pathname==='/api/config'||url.pathname==='/api/voice/config') {
         idleConfig();
         const voiceFields=['voice','model','voiceProvider','mimoApiKey','mimoTtsMode','mimoVoice','mimoReferenceId','mimoStyle','mimoAsrLanguage','clearMimoApiKey'];
@@ -159,6 +177,12 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         json(res,200,{config:publicConfig(config),napcatSync});
       } else if(url.pathname==='/api/voice/references'){
         json(res,200,{reference:voice.uploadReference(audioInput(input),input.name)});
+      } else if(url.pathname==='/api/voice/reference/delete'||url.pathname==='/api/voice/reference/restore'){
+        idleConfig();const restore=url.pathname.endsWith('/restore');
+        if(!restore&&config.mimoTtsMode==='clone'&&config.mimoReferenceId===input.id)throw Error('这是已保存配置正在使用的参考录音，请先选择其他音色或预置音色并保存');
+        const reference=voice.archiveReference(input.id,restore);
+        if(!restore&&config.mimoReferenceId===input.id){const next=validate({mimoReferenceId:''},config);writeJson(configFile,next);config=next;}
+        json(res,200,{reference});
       } else if (url.pathname==='/api/voice/synthesize') json(res,200,await voice.synthesize(input.text,config));
       else if (url.pathname==='/api/voice/transcribe') {
         json(res,200,await voice.transcribe(audioInput(input),config));
@@ -166,6 +190,9 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         const dsh=new DshClient(config);
         try { const presets=await dsh.probe(); json(res,200,{ok:true,presets}); } finally { dsh.close(); }
       } else if(url.pathname==='/api/qq/probe') json(res,200,await probeQQ(config));
+      else if(url.pathname==='/api/qq/control/status')json(res,200,await qqControl.status(config));
+      else if(url.pathname==='/api/qq/control/qrcode'){idleConfig();json(res,200,await qqControl.qrcode(config));}
+      else if(url.pathname==='/api/qq/control/contacts')json(res,200,await qqControl.contacts(config,input.kind));
       else if(url.pathname==='/api/qq/desktop-check') json(res,200,await desktop.inspect(config));
       else if(url.pathname==='/api/qq/sync') json(res,200,await syncInterface());
       else if(url.pathname==='/api/qq/desktop-start') { await syncInterface();json(res,200,await desktop.start(config)); }

@@ -24,6 +24,7 @@ export class Proactive {
   async candidate(session,config,store,{activeKey,call,groupTimes=[]}){
     const route=session.route,now=this.now(),lastUserAt=session.lastUserAt??0;
     if(!lastUserAt||session.blocked||(!route.group&&!config.memoryEnabled))return null;
+    if(config.proactiveMaxPerSession>0&&(session.proactiveAttempts??0)>=config.proactiveMaxPerSession)return null;
     if(!route.group&&activeKey!==route.key)return null;
     const policy=this.policy(config,route.group),schedule=new RecallSchedule(this.file,route.key,this.random);
     if(!schedule.due(now,policy,lastUserAt))return null;

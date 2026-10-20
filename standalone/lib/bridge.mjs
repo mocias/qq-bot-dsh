@@ -64,7 +64,7 @@ export class Bridge {
     }
   }
   memory(key){if(!this.memories.has(key))this.memories.set(key,new MemoryStore(this.runtime,key));return this.memories.get(key);}
-  configFor(route){return resolveChatConfig(this.config,route);}
+  configFor(route){const config=resolveChatConfig(this.config,route);return {...config,memoryContextActive:!config.memoryActiveOnly||this.state.lastActiveKey===route.key};}
   scope(route){const config=this.configFor(route),preset=route.group?config.groupPreset:config.privatePreset;return createHash('sha256').update(config.dshUrl+'|'+preset+'|'+route.key).digest('hex');}
   summary(){return Object.values(this.state.sessions).filter(s=>s.route).map(s=>({key:s.route.key,sessionId:s.id,blocked:s.blocked,
     compactions:s.life?.compactions.length??0,pendingCompactions:s.life?.compactions.filter(c=>!s.life.digestedIds.includes(c.id)).length??0,
@@ -345,6 +345,7 @@ export class Bridge {
         const candidate=await this.proactive.candidate(session,config,this.memory(route.key),{activeKey:this.state.lastActiveKey,groupTimes:this.state.groupSendTimes[route.key],call:(...args)=>this.call(...args)});
         if(!candidate||generation!==this.generation||version!==session.life.version||this.queues.has(route.key))continue;
         candidate.reserve(); // reserve before queuing; no replay after a crash or uncertain send
+        session.proactiveAttempts=(session.proactiveAttempts??0)+1;this.persist();
         const controller=new AbortController();this.backgrounds.set(route.key,controller);
         this.status.active++;
         try{await this.enqueue({...candidate.route,signal:controller.signal},generation);}

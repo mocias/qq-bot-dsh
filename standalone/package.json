@@ -1,6 +1,6 @@
 {
   "name": "qq-rsi-standalone",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "js-yaml": "4.3.2",
+    "qrcode": "1.5.4",
     "ws": "8.22.0"
   }
 }

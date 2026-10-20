@@ -148,6 +148,8 @@ test('new user input cancels proactive work, preserves memory and suppresses the
   await tick;
   for(let i=0;i<100&&b.status.active;i++)await new Promise(r=>setTimeout(r,5));
   assert.equal(reserved,1);assert.equal(finished,true);assert.equal(sent.length,1);
+  assert.equal(session.proactiveAttempts,1);
+  assert.equal(new Bridge(root).state.sessions[b.scope(route)].proactiveAttempts,1);
   assert.equal(sent[0].params.message[0].data.text,'真实消息回复');assert.equal(session.blocked,false);
 });
 test('unsolicited memory proposals do not suppress normal or proactive replies and never write pages',async t=>{

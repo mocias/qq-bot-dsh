@@ -31,6 +31,7 @@ export class MemoryStore {
     this.recover();
     this.state=readJson(this.meta,{version:1,key,receipts:[],completed:0,lastDigest:0});
     if(this.state.key!==key)throw Error('记忆库范围不匹配');
+    if(!fs.existsSync(this.meta))writeJson(this.safe('.runtime/store.json'),this.state);
   }
   safe(relative) {
     if(relative.includes('\\')||relative.split('/').some(x=>!x||x==='.'||x==='..'))throw Error('记忆路径不合法');
@@ -66,10 +67,10 @@ export class MemoryStore {
   }
   context(query,config) {
     for(const name of ['SOUL.md','MEMORY.md','index.md','log.md','BOOTSTRAP.md'])this.safe(name);
-    const boot=renderBootBlock(this.dir,{bootMaxChars:6000,digestMode:'compaction-idle',digestIdleMinutes:config.memoryIdleMinutes,digestRotateAfterCompactions:config.rotateAfterCompactions}).replaceAll(this.dir,'[本会话独立记忆库]').split('### 最近动态（')[0];
+    const boot=renderBootBlock(this.dir,{bootMaxChars:config.memoryBootMaxChars??6000,digestMode:'compaction-idle',digestIdleMinutes:config.memoryIdleMinutes,digestRotateAfterCompactions:config.rotateAfterCompactions}).replaceAll(this.dir,'[本会话独立记忆库]').split('### 最近动态（')[0];
     const tokens=[...new Set((query.toLowerCase().match(/[a-z0-9]{2,}|[\u3400-\u9fff]{2}/g)||[]))];
     const pages=this.pages().map(page=>({...page,score:tokens.reduce((n,t)=>n+(page.text.toLowerCase().includes(t)?1:0),0)+(page.name.startsWith('user/')?0.2:0)})).sort((a,b)=>b.score-a.score);
-    let budget=10000;const selected=[];
+    let budget=config.memoryPageMaxChars??10000;const selected=[];
     for(const page of pages){if(budget<=0)break;const text=page.text.slice(0,Math.min(budget,3000));selected.push({page:page.name,text});budget-=text.length;}
     // Reuse the original access bookkeeping so salience/decay can work across sessions.
     touchPages(this.dir,selected.map(page=>page.page));
@@ -119,10 +120,10 @@ export class MemoryStore {
 
 export function preparePrompt(store,route,config,extraEvidence=[]) {
   const evidence=[route.messageId,...extraEvidence];
-  return [config.memoryEnabled?memorySkillContent({digestMode:'compaction-idle'}):'',
+  return [config.memoryEnabled&&config.memoryRegisterSkill!==false?memorySkillContent({digestMode:'compaction-idle'}):'',
     '宿主当前时间：'+new Date().toISOString()+'；用户时区 Asia/Shanghai。记忆访问日期由宿主维护，不要猜测日期。',
-    config.memoryEnabled?'独立服务适配规则（覆盖上文的磁盘、CLI 和工具操作方式）：原模块的记忆协议已加载。只通过下文 JSON memory 提交修改，由宿主校验、记账和编译索引；不得自行调用工具读写文件。生成页面请保留 frontmatter、summary、salience、last_access 和相关页面链接；仅在有依据时建立互链。不要提及内部格式。旧身份与事实不能推广到其他联系人。':'',
-    config.memoryEnabled?store.context(route.text,config):'',
+    config.memoryEnabled?'独立服务适配规则（覆盖上文的磁盘、CLI 和工具操作方式）：只通过下文 JSON memory 提交修改，由宿主校验、记账和编译索引；不得自行调用工具读写文件。生成页面请保留 frontmatter、summary、salience、last_access 和相关页面链接；仅在有依据时建立互链。不要提及内部格式。旧身份与事实不能推广到其他联系人。':'',
+    config.memoryEnabled&&config.memoryAutoInject!==false&&config.memoryContextActive!==false?store.context(route.text,config):'',
     '你正在响应 QQ 消息。只把 reply 字段作为给用户的最终答复。返回完整 JSON 对象 {"reply":"自然语言回复","memory":[]}，不要代码围栏。',
     '可选 qq 字段用于当前聊天的多媒体回复：{"images":["本轮图片路径、当前工作区内图片相对路径或公开HTTP图片地址"]}，或 {"voice":"要朗读的短句"}，或 {"forward":[{"name":"助手","content":"一条内容"}]}。每次最多一种形式，不能指定其他收件人。转发最多50节点，每节点500字；图片最多9张。语音遵循本聊天开关、安静时段和文字偏好。正文 reply 不要重复语音或转发内容，不要直接调用工具发送QQ。',
     '当前聊天发送能力：'+JSON.stringify({images:config.qqImageSend??config.qqImages,forward:config.qqForwardSend??config.qqForward,files:config.qqFileSend??config.qqFiles,voice:config.qqVoiceSend&&(!route.group||!!config.groupVoiceSend),stickers:config.stickerSend??config.knowledgeEnabled})+'。关闭的能力不能请求，改用普通文字。',

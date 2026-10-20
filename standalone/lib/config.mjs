@@ -13,6 +13,7 @@ export const defaults = {
   voiceProvider: 'local', mimoApiKey: '', mimoTtsMode: 'preset', mimoVoice: 'mimo_default',
   mimoReferenceId: '', mimoStyle: '', mimoAsrLanguage: 'auto',
   memoryEnabled: true, memoryIdleMinutes: 30, rotateAfterCompactions: 15,
+  memoryAutoInject:true,memoryRegisterSkill:true,memoryActiveOnly:false,memoryBootMaxChars:6000,memoryPageMaxChars:10000,proactiveMaxPerSession:0,
   rotationEnabled: true, privateMessagePolicy: 'steer', groupMessagePolicy: 'queue',
   qqImages: true, qqForward: true, qqVoiceReceive: true, qqVoiceSend: true,
   qqMediaRoots: [], ffmpegPath: '', voiceReplyMode: 'auto', voiceQuietStart: 23, voiceQuietEnd: 8,
@@ -42,8 +43,12 @@ export function validate(input, previous = defaults) {
     } else if (field === 'privateUsers' || field === 'groups' || field === 'adminUsers') {
       if (!Array.isArray(value) || value.length > 100 || value.some(x => typeof x !== 'string' || !/^\d{5,20}$/.test(x))) throw Error('QQ 号码请使用数字，每行一个');
       out[field] = [...new Set(value)];
-    } else if (['qqFiles','groupAmbientEnabled','groupToolsEnabled','knowledgeEnabled','remindersEnabled','memoryEnabled','rotationEnabled','dshLocalAuth','qqImages','qqForward','qqVoiceReceive','qqVoiceSend','recallEnabled','groupProactiveEnabled'].includes(field)) {
+    } else if (['memoryAutoInject','memoryRegisterSkill','memoryActiveOnly','qqFiles','groupAmbientEnabled','groupToolsEnabled','knowledgeEnabled','remindersEnabled','memoryEnabled','rotationEnabled','dshLocalAuth','qqImages','qqForward','qqVoiceReceive','qqVoiceSend','recallEnabled','groupProactiveEnabled'].includes(field)) {
       if(typeof value!=='boolean') throw Error('开关格式不正确'); out[field]=value;
+    } else if (['memoryBootMaxChars','memoryPageMaxChars','proactiveMaxPerSession'].includes(field)) {
+      const budget=field!=='proactiveMaxPerSession';
+      if(!Number.isInteger(value)||value<(budget?1000:0)||value>(budget?30000:100))throw Error('记忆容量或次数超出范围');
+      out[field]=value;
     } else if (['groupAmbientDelaySeconds','groupAmbientMinMinutes','memoryIdleMinutes','rotateAfterCompactions','recallMinMinutes','recallMaxMinutes','recallMaxPerDay','groupProactiveMinMinutes','groupProactiveMaxMinutes','groupProactiveMaxPerDay','voiceQuietStart','voiceQuietEnd','groupMinReplyGapSeconds','groupMaxRepliesPerHour'].includes(field)) {
       const zero=field.endsWith('PerDay')||field.startsWith('voiceQuiet')||['groupMinReplyGapSeconds','groupMaxRepliesPerHour'].includes(field);
       const max=field.startsWith('voiceQuiet')?23:field.endsWith('PerDay')?100:10080;

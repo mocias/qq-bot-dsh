@@ -30,23 +30,31 @@ export class VoiceService extends LocalVoice{
     if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||stat.size>MAX_REFERENCE)throw Error('参考录音文件无效');
     return file;
   }
-  reference(id){
+  reference(id,{includeDeleted=false}={}){
     if(typeof id!=='string'||!/^[0-9a-f-]{36}$/.test(id))throw Error('请选择已上传的参考录音');
     try{
       const meta=readJson(this.safeReferenceFile(id+'.json'),null);
       if(meta.id!==id||!['wav','mp3'].includes(meta.format))throw Error();
+      if(meta.deletedAt&&!includeDeleted)throw Error();
       const bytes=fs.readFileSync(this.safeReferenceFile(id+'.'+meta.format));
       if(audioFormat(bytes)!==meta.format)throw Error();
       return {meta,bytes};
     }catch{throw Error('参考录音不存在或已损坏，请重新上传');}
   }
-  listReferences(){
+  listReferences({deleted=false}={}){
     const results=[];
     for(const name of fs.readdirSync(this.references)){
       if(!/^[0-9a-f-]{36}\.json$/.test(name))continue;
-      try{results.push(this.reference(name.slice(0,-5)).meta);}catch{}
+      try{const meta=this.reference(name.slice(0,-5),{includeDeleted:true}).meta;if(!!meta.deletedAt===deleted)results.push(meta);}catch{}
     }
     return results.sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+  }
+  archiveReference(id,restore=false){
+    if(this.busy)throw Error('语音任务进行中，请稍后修改录音');
+    const {meta}=this.reference(id,{includeDeleted:true});
+    if(restore){if(this.listReferences().length>=20&&!this.listReferences().some(x=>x.id===id))throw Error('参考录音最多保存 20 份');delete meta.deletedAt;}
+    else meta.deletedAt=new Date().toISOString();
+    writeJson(this.safeReferenceFile(id+'.json'),meta);return meta;
   }
   uploadReference(bytes,name){
     if(!Buffer.isBuffer(bytes)||bytes.length>MAX_REFERENCE)throw Error('参考录音不能超过 7 MiB');

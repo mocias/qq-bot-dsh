@@ -9,7 +9,7 @@ export const defaults = {
   wakeEnabled:false,wakeKeywords:'',wakeSpeakers:[],
   bubbleMinSeconds:2,bubbleMaxSeconds:5,
   chatPolicy: {private:{},group:{},overrides:{}},
-  dshUrl: 'http://127.0.0.1:3080', dshToken: '', dshLocalAuth: false,
+  dshUrl: 'http://127.0.0.1:3080', dshToken: '', dshLocalAuth: false, dshNativeTools:false,
   qqUrl: 'ws://127.0.0.1:3001', qqToken: '', botQQ: '',
   adminUsers: [], qqFiles: false, groupAmbientEnabled: false, groupAmbientDelaySeconds: 10, groupAmbientMinSeconds: 300, groupToolsEnabled: false, knowledgeEnabled: false, remindersEnabled: false,
   privateUsers: [], groups: [], privatePreset: '', groupPreset: '', permissionPreset:'',
@@ -42,7 +42,9 @@ export function validate(input, previous = defaults) {
     if(field==='chatPolicy')continue;
     if (!(field in input)) continue;
     const value = input[field];
-    if(field==='qqMediaRoots'){
+    if(field==='dshNativeTools'){
+      if(typeof value!=='boolean')throw Error('DSH原生工具开关格式不正确');out[field]=value;
+    } else if(field==='qqMediaRoots'){
       if(!Array.isArray(value)||value.length>10||value.some(x=>typeof x!=='string'||x.length>1000||!(/^[a-z]:[\\/]/i.test(x)||x.startsWith('/'))||x.startsWith('//')||x.startsWith('\\\\')))throw Error('QQ 媒体目录必须是本机绝对路径');
       out[field]=[...new Set(value)];
     } else if (field === 'privateUsers' || field === 'groups' || field === 'adminUsers' || field === 'wakeSpeakers') {
@@ -52,9 +54,11 @@ export function validate(input, previous = defaults) {
       if(typeof value!=='boolean') throw Error('开关格式不正确'); out[field]=value;
     } else if (['bubbleMinSeconds','bubbleMaxSeconds'].includes(field)) {
       if(!Number.isInteger(value)||value<1||value>60)throw Error('气泡间隔应为 1～60 秒');out[field]=value;
-    } else if (['memoryBootMaxChars','memoryPageMaxChars','proactiveMaxPerSession'].includes(field)) {
-      const budget=field!=='proactiveMaxPerSession';
-      if(!Number.isInteger(value)||value<(budget?1000:0)||value>(budget?30000:100))throw Error('记忆容量或次数超出范围');
+    } else if (['memoryBootMaxChars','memoryPageMaxChars'].includes(field)) {
+      if(!Number.isSafeInteger(value)||value<1000)throw Error('记忆预算须为至少 1000 的可精确表示整数（字符数）');
+      out[field]=value;
+    } else if (field==='proactiveMaxPerSession') {
+      if(!Number.isInteger(value)||value<0||value>100)throw Error('记忆次数超出范围');
       out[field]=value;
     } else if (['memoryIdleSeconds','groupAmbientMinSeconds','recallMinSeconds','recallMaxSeconds','groupProactiveMinSeconds','groupProactiveMaxSeconds'].includes(field)) {
       if(!Number.isInteger(value)||value<1||value>604800)throw Error('时间间隔应为 1～604800 秒');out[field]=value;

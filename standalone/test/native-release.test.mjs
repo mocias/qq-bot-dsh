@@ -1,0 +1,67 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {execFileSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {createHash} from 'node:crypto';
+import {createRequire} from 'node:module';
+import YAML from 'js-yaml';
+const source=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
+function fixture(t){
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'qq-native-release-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const deployment=path.join(dir,'deployment'),release=path.join(dir,'release');
+  for(const name of ['standalone','native-dsh-plugin','scripts'])fs.mkdirSync(path.join(release,name),{recursive:true});
+  for(const name of ['standalone','native-dsh-plugin'])fs.writeFileSync(path.join(release,name,'package.json'),JSON.stringify({version:'0.16.0'}));
+  fs.writeFileSync(path.join(release,'release.json'),JSON.stringify({version:'0.16.0',protocol:1,buildId:createHash('sha256').update('{}').digest('hex'),hashes:{}}));
+  fs.copyFileSync(path.join(source,'scripts/start-release.ps1'),path.join(release,'scripts/start-release.ps1'));
+  fs.mkdirSync(path.join(deployment,'standalone','.runtime'),{recursive:true});
+  fs.writeFileSync(path.join(deployment,'standalone','.runtime','config.private.json'),JSON.stringify({privatePreset:'kept',memoryEnabled:true}));
+  return {dir,deployment,release};
+}
+test('one activation pointer selects both service and plugin and preserves configuration',t=>{
+  const {deployment,release}=fixture(t);
+  execFileSync(process.execPath,[path.join(source,'scripts/activate-release.mjs'),deployment,release]);
+  const manifest=JSON.parse(fs.readFileSync(path.join(deployment,'.runtime/native-release.private.json')));
+  assert.equal(manifest.releaseRoot,release);assert.equal(manifest.version,'0.16.0');
+  const config=JSON.parse(fs.readFileSync(path.join(deployment,'standalone/.runtime/config.private.json')));
+  assert.equal(config.privatePreset,'kept');assert.equal(config.dshNativeTools,true);
+  assert.match(fs.readFileSync(path.join(deployment,'start-latest.ps1'),'utf8'),/start-release/);
+});
+test('mismatched service/plugin release is rejected without changing the active pointer',t=>{
+  const {deployment,release}=fixture(t);
+  fs.writeFileSync(path.join(release,'native-dsh-plugin/package.json'),JSON.stringify({version:'old'}));
+  assert.throws(()=>execFileSync(process.execPath,[path.join(source,'scripts/activate-release.mjs'),deployment,release],{stdio:'pipe'}));
+  assert.equal(fs.existsSync(path.join(deployment,'.runtime/native-release.private.json')),false);
+});
+test('installer registers a resolvable bundle, migrates legacy row, and preserves disabled state on updates',t=>{
+  const {dir,deployment,release}=fixture(t);
+  const profile=path.join(dir,'profile'),app=path.join(dir,'app');
+  fs.mkdirSync(profile);fs.mkdirSync(path.join(app,'resources'),{recursive:true});fs.writeFileSync(path.join(app,'resources/app.asar'),'test');
+  fs.writeFileSync(path.join(profile,'package.json'),JSON.stringify({name:'test-profile',dependencies:{other:'1'},dsh:{profile:{bundles:['other']}}}));
+  fs.writeFileSync(path.join(profile,'cordis.patch.yml'),'- id: existing\n  config:\n    preserve: true\n# BEGIN QQ RSI NATIVE ADAPTER\n- insert:\n    - id: qq-rsi-native\n      name: file:///old/index.mjs\n# END QQ RSI NATIVE ADAPTER\n');
+  fs.cpSync(path.join(source,'native-dsh-plugin'),path.join(release,'native-dsh-plugin'),{recursive:true});
+  const pkg=JSON.parse(fs.readFileSync(path.join(source,'native-dsh-plugin/package.json')));
+  fs.mkdirSync(path.join(deployment,'.runtime'),{recursive:true});
+  fs.writeFileSync(path.join(deployment,'.runtime/native-release.private.json'),JSON.stringify({releaseRoot:release,version:pkg.version,protocol:1}));
+  const args=[path.join(source,'scripts/install-native-plugin.mjs'),deployment,profile,app];
+  execFileSync(process.execPath,args);execFileSync(process.execPath,args);
+  const patch=fs.readFileSync(path.join(profile,'cordis.patch.yml'),'utf8');
+  assert.match(patch,/preserve: true/);assert.equal(patch.includes('id: qq-rsi-native'),false);
+  assert.equal(fs.readdirSync(profile).filter(x=>x.includes('before-qq-native')).length,2);
+  const require=createRequire(path.join(profile,'package.json'));
+  const installed=require('dsh-qq-rsi-native/package.json');
+  assert.equal(installed.version,pkg.version);
+  const bundle=YAML.load(fs.readFileSync(path.join(deployment,'native-dsh-loader',installed.dsh.bundle.patch),'utf8'));
+  assert.equal(bundle[0].insert[0].name,installed.name);
+  assert.equal(bundle[0].insert[0].config.releaseManifest,path.join(deployment,'.runtime/native-release.private.json').replaceAll('\\','/'));
+  assert.equal(require('dsh-qq-rsi-native/locale/zh-CN.json').meta.title,'QQ RSI 轻量插件');
+  const profilePath=path.join(profile,'package.json'),saved=JSON.parse(fs.readFileSync(profilePath));
+  assert.equal(saved.dependencies.other,'1');assert.deepEqual(saved.dsh.profile.bundles,['other','dsh-qq-rsi-native']);
+  saved.dsh.profile.bundles=['other'];fs.writeFileSync(profilePath,JSON.stringify(saved));
+  execFileSync(process.execPath,args);
+  assert.deepEqual(JSON.parse(fs.readFileSync(profilePath)).dsh.profile.bundles,['other']);
+  const loader=fs.readFileSync(path.join(deployment,'native-dsh-loader/index.mjs'),'utf8');
+  assert.match(loader,/app.asar\/dsh\/node_modules/);assert.equal(loader.includes("from '@deepseek-ai/"),false);
+});

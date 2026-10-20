@@ -20,8 +20,8 @@ export const policyFields={
   memoryAutoInject:{...bool('新会话开始时注入本聊天记忆','会话与记忆'),help:'人设、记忆快照和工具协议在新会话首次输入时加载一次；之后只传最新消息段。人设在面板被修改时会单独通知一次。'},
   memoryRegisterSkill:bool('新会话加载原 memory 操作协议','会话与记忆'),
   memoryActiveOnly:bool('仅最近活跃聊天的新会话注入记忆','会话与记忆'),
-  memoryBootMaxChars:number('启动资料预算（字数）','会话与记忆',1000,30000),
-  memoryPageMaxChars:number('相关记忆页预算（字数）','会话与记忆',1000,30000),
+  memoryBootMaxChars:{...number('启动资料预算（字符数）','会话与记忆',1000),help:'新会话启动资料的字符预算；无固定业务上限，不限制记忆库的存储容量。'},
+  memoryPageMaxChars:{...number('相关记忆页预算（字符数）','会话与记忆',1000),help:'选取相关记忆页的合计字符预算；实际加载量取决于资料和选页规则。'},
   memoryIdleSeconds:number('有新压缩后，连续空闲多久整理（秒）','会话与记忆',1,604800),
   rotationEnabled:{...bool('记忆整理成功后自动轮换会话','会话与记忆'),help:'私聊和群聊均支持。达到成功压缩次数、连续空闲且记忆已落盘后，在原工作区开启新会话；保留长期记忆和旧会话。'},
   rotateAfterCompactions:number('轮换前成功压缩次数','会话与记忆',1,10080),
@@ -86,7 +86,7 @@ function patch(value,kind){
     // Retired keyword wake settings must not prevent loading older configurations.
     if(key==='wakeKeywords')continue;
     const s=Object.hasOwn(fields,key)?fields[key]:null;if(!s)throw Error('此聊天域不支持设置：'+key);
-    if(s.type==='boolean'&&typeof v!=='boolean'||s.type==='number'&&(!Number.isInteger(v)||v<s.min||v>s.max))throw Error(s.label+'格式或范围不正确');
+    if(s.type==='boolean'&&typeof v!=='boolean'||s.type==='number'&&(!Number.isSafeInteger(v)||v<s.min||(s.max!==undefined&&v>s.max)))throw Error(s.label+'格式或范围不正确');
     if(s.type==='select'&&(typeof v!=='string'||!Object.hasOwn(s.options,v)))throw Error(s.label+'无效');
     if(s.type==='string'&&(typeof v!=='string'||v.length>s.max))throw Error(s.label+'过长或格式不正确');
     if(s.type==='time'&&(typeof v!=='string'||!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(v)))throw Error('时间格式应为 HH:mm');

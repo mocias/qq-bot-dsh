@@ -73,7 +73,7 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
   }
   const token=randomBytes(32).toString('hex'), cookie=randomBytes(32).toString('hex');
   const assets = new Map([['/', ['text/html; charset=utf-8','index.html']], ['/app.js',['text/javascript; charset=utf-8','app.js']], ['/style.css',['text/css; charset=utf-8','style.css']]]);
-  for(const [url,file] of [['/memory-viewer.js','memory-viewer.js'],['/memory-layout.js','../lib/legacy-memory/graph-layout.js'],['/memory-view.js','../../dsh-plugin-memory-source/lib/graph-view.js']])assets.set(url,['text/javascript; charset=utf-8',file]);
+  for(const [url,file] of [['/memory-budget.js','memory-budget.js'],['/memory-viewer.js','memory-viewer.js'],['/memory-layout.js','../lib/legacy-memory/graph-layout.js'],['/memory-view.js','../../dsh-plugin-memory-source/lib/graph-view.js']])assets.set(url,['text/javascript; charset=utf-8',file]);
   function json(res,status,value) { res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'}); res.end(JSON.stringify(value)); }
   async function body(req) {
     if (!req.headers['content-type']?.startsWith('application/json')) throw Error('请求需要使用 JSON');
@@ -104,6 +104,12 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
     }
     if (req.method==='POST' && (req.headers.origin!==origin || req.headers['x-qq-rsi']!=='panel')) { json(res,403,{error:'请求来源校验失败'}); return; }
     try {
+      if(req.method==='POST'&&url.pathname==='/api/service/shutdown'){
+        idleConfig();
+        json(res,200,{stopping:true});
+        bridge.stop();server.close();
+        return;
+      }
       if (req.method==='GET' && assets.has(url.pathname)) {
         const [type,file]=assets.get(url.pathname); res.writeHead(200,{'Content-Type':type}); res.end(fs.readFileSync(path.join(here,'public',file))); return;
       }
@@ -250,6 +256,9 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
       } else if (url.pathname==='/api/voice/synthesize') json(res,200,await voice.synthesize(input.text,previewConfig(input)));
       else if (url.pathname==='/api/voice/transcribe') {
         json(res,200,await voice.transcribe(audioInput(input),previewConfig(input)));
+      } else if (url.pathname==='/api/dsh/native-status') {
+        const dsh=new DshClient(config);
+        try {json(res,200,await dsh.nativeStatus());} finally {dsh.close();}
       } else if (url.pathname==='/api/dsh/probe') {
         const dsh=new DshClient(config);
         try { const presets=await dsh.probe(); json(res,200,{ok:true,presets}); } finally { dsh.close(); }

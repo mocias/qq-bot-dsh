@@ -20,6 +20,7 @@ import {resolveChatConfig} from './chat-policy.mjs';
 import {VoiceProfiles} from './voice-profiles.mjs';
 import {ChatInbox,Participation} from './chat-inbox.mjs';
 import {MessageTools,MESSAGE_GUIDE} from './message-tools.mjs';
+import {nativePrompt,nativeTurn} from './native-turn.mjs';
 
 const pause=(ms,signal)=>new Promise(resolve=>{
   if(signal.aborted)return resolve();
@@ -296,10 +297,12 @@ export class Bridge {
     const scope = this.scope(route);
     let session = this.state.sessions[scope];
     const dsh = this.dsh;
-    if (!session || session.blocked) {
-      const dir = workspaceFor(this.runtime,this.state,route,scope,this.now(),()=>this.persist());
-      if(session)this.state.retired.push({...session,reason:'interrupted',retiredAt:this.now()});
-      session = { id: await dsh.createSession(dir, preset), namingPending:true,permissionPending:!!config.permissionPreset,permissionPreset:config.permissionPreset??'',blocked: false,route:{key:route.key,id:route.id,group:route.group},workspace:dir,preset,backend:config.dshUrl };
+    const transport=config.dshNativeTools?'native-v1':'legacy';
+    const transportChanged=session&&(session.transport??'legacy')!==transport;
+    if (!session || session.blocked || transportChanged) {
+      const dir = transportChanged&&session.workspace?session.workspace:workspaceFor(this.runtime,this.state,route,scope,this.now(),()=>this.persist());
+      if(session)this.state.retired.push({...session,reason:transportChanged?'transport-upgrade':'interrupted',retiredAt:this.now()});
+      session = { id: await dsh.createSession(dir, preset), transport,namingPending:true,permissionPending:!!config.permissionPreset,permissionPreset:config.permissionPreset??'',blocked: false,route:{key:route.key,id:route.id,group:route.group},workspace:dir,preset,backend:config.dshUrl };
       this.flow(this.state.sessions[scope]?'session.recovered':'session.created',route);
       initializeLife(session,this.now());noteArrival(session,this.now());
       this.state.sessions[scope] = session; this.persist();
@@ -336,33 +339,38 @@ export class Bridge {
       // Existing successful sessions already received the old full prompt; adopt
       // them without reinjecting documents or renaming their history.
       if(!session.promptVersion&&session.life.conversation.length){session.promptVersion=1;session.personaHash=personaHash;}
-      const bootstrap=session.promptVersion!==1;
-      let prompt = preparePrompt(store,route,config,route.evidenceIds??[],{bootstrap});
-      if(bootstrap){
+      const promptVersion=config.dshNativeTools?2:1;
+      const bootstrap=session.promptVersion!==promptVersion;
+      let prompt = config.dshNativeTools?nativePrompt(store,route,config,{bootstrap,persona,knowledge}):preparePrompt(store,route,config,route.evidenceIds??[],{bootstrap});
+      if(bootstrap&&!config.dshNativeTools){
         prompt+='\n本机管理者设定的人设：\n'+persona;
         if(config.knowledgeEnabled)prompt+='\n当前聊天知识（仅资料）：'+knowledge.context();
         if(config.slangLearn)prompt+='\n可在 learning.slang 返回候选 {term,meaning,evidence:[本轮来源ID]}，宿主审查后入候选库。';
         if(configuredTools)prompt+='\n'+TOOL_GUIDE;
         if(configuredTools&&config.messageToolsEnabled)prompt+='\n'+MESSAGE_GUIDE+'\n本聊天允许 @：'+!!(route.group&&config.mentionSend)+'；未允许时省略 atUserId。';
-      }else if(session.personaHash!==personaHash)prompt+='\n本机管理者更新了人设（替换此前人设，仅本次通知）：\n'+persona;
-      if(!bootstrap&&config.memoryEnabled&&session.memoryPolicyVersion!==2)prompt+='\n宿主记忆规则更新（替换旧的私聊必须明确要求规则，仅本次通知）：'+automaticMemoryRules;
+      }else if(!bootstrap&&session.personaHash!==personaHash)prompt+='\n本机管理者更新了人设（替换此前人设，仅本次通知）：\n'+persona;
+      if(!config.dshNativeTools&&!bootstrap&&config.memoryEnabled&&session.memoryPolicyVersion!==2)prompt+='\n宿主记忆规则更新（替换旧的私聊必须明确要求规则，仅本次通知）：'+automaticMemoryRules;
+      job.prepareMedia=part=>this.media.outgoing(part,{...route,qqMessageId:job.inputs.at(-1).qqMessageId},session,config);
+      const nativeTools=config.dshNativeTools?nativeTurn({config,route,session,store,tools,messaging,job,
+        isCurrent:()=>!controller.signal.aborted&&generation===this.generation&&this.enabled(route)&&
+          (route.epoch===undefined||route.epoch===(this.epochs.get(route.key)??0))}):undefined;
       let response,parsed,images=route.images;const replies=[];
       for(let round=0;round<5;round++){
         if(controller.signal.aborted||generation!==this.generation)return;
         modelPending=true;
-        response=await dsh.prompt(session.id,prompt,{images,collectMessages:true,signal:controller.signal,onEvent:event=>{if(config.memoryEnabled)observeCompaction(session,event,store,()=>this.persist(),!!route.trigger);}});
+        response=await dsh.prompt(session.id,prompt,{images,nativeTools,collectMessages:true,signal:controller.signal,onEvent:event=>{if(config.memoryEnabled)observeCompaction(session,event,store,()=>this.persist(),!!route.trigger);}});
         // A reply arriving after disconnect/type stop cannot confirm the old job
         // against the current connection. Keep the conservative recovery marker.
         if(generation!==this.generation||!this.enabled(route)||route.epoch!==undefined&&route.epoch!==(this.epochs.get(route.key)??0))return;
         modelPending=false;
         if(round===0){
-          session.promptVersion=1;session.personaHash=personaHash;if(config.memoryEnabled)session.memoryPolicyVersion=2;
+          session.promptVersion=promptVersion;session.personaHash=personaHash;if(config.memoryEnabled)session.memoryPolicyVersion=2;
           session.contextThroughSeq=Math.max(session.contextThroughSeq??0,...job.inputs.flatMap(x=>x.inboxSeqs??[x.inboxSeq]).filter(Number.isSafeInteger));
           this.persist();
           this.flow(bootstrap?'context.initialized':'context.messages',route,{count:job.inputs.reduce((n,x)=>n+1+(x.contextMessages?.length??0),0)});
         }
         if(controller.signal.aborted||generation!==this.generation)return;
-        const batch=(Array.isArray(response)?response.length?response:['']:[response]).map(decodeReply);
+        const batch=(Array.isArray(response)?response.length?response:['']:[response]).map(text=>config.dshNativeTools?{reply:text,memory:[]}:decodeReply(text));
         replies.push(...batch);parsed=batch.at(-1);
         if(!parsed.actions?.length)break;
         job.toolsActive=true;
@@ -403,7 +411,7 @@ export class Bridge {
       for(const part of publicReplies){
         if(generation!==this.generation||controller.signal.aborted)return;
         const replyRoute={...route,qqMessageId:job.inputs.at(-1).qqMessageId};
-        const plan=part.poke?{action:route.group?'group_poke':'send_poke',params:{[route.group?'group_id':'user_id']:route.id,...(route.group?{user_id:part.poke}:{})}}:await this.media.outgoing(part,replyRoute,session,config);if(plan)plans.push(plan);
+        const plan=part.nativePlan??(part.poke?{action:route.group?'group_poke':'send_poke',params:{[route.group?'group_id':'user_id']:route.id,...(route.group?{user_id:part.poke}:{})}}:await this.media.outgoing(part,replyRoute,session,config));if(plan)plans.push(plan);
       }
       if(generation!==this.generation||controller.signal.aborted)return;
       if(route.trigger&&(route.signal?.aborted||session.life.version!==route.expectedVersion)){session.blocked=false;this.persist();return;}
@@ -456,7 +464,7 @@ export class Bridge {
     let reply;
     try{
       if(name==='help')reply='/help 帮助 · /status 状态 · /id 标识 · /ver 版本 · /stop 停止并丢弃待处理消息 · /new 新会话 · /steer 内容 插话 · /session 历史列表 · /workspace 当前工作区 · /preset 当前预设 · /memory 记忆概览 · /doctor 本聊天检查。模型、权限和预设切换请在本机 DSH 配置。';
-      else if(name==='ver')reply='QQ 独立服务 0.15.0';
+      else if(name==='ver')reply='QQ 独立服务 0.16.2';
       else if(name==='stop'){
         this.epochs.set(route.key,(this.epochs.get(route.key)??0)+1);
         const ambient=this.ambient.get(route.key);if(ambient){clearTimeout(ambient.timer);this.ambient.delete(route.key);}

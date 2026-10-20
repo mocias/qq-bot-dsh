@@ -1,4 +1,5 @@
 import {renderHealth,renderGraph} from './memory-viewer.js';
+import {mountMemoryBudget} from './memory-budget.js';
 const $=id=>document.getElementById(id);
 let policyData=null,policyLoad=0;
 const policyDrafts=new Map();
@@ -35,7 +36,7 @@ function paintPolicy(data){
     const label=element('label',spec.label);label.htmlFor='policy-'+key;
     const input=element(spec.type==='ids'?'textarea':spec.type==='select'?'select':'input');input.id='policy-'+key;
     if(spec.type==='select')for(const [value,text]of Object.entries(spec.options))input.append(new Option(text,value));
-    else if(spec.type!=='ids'){input.type=spec.type==='boolean'?'checkbox':spec.type==='string'?'text':spec.type; if(spec.type==='number'){input.min=spec.min;input.max=spec.max;input.required=true;}if(spec.max&&spec.type==='string')input.maxLength=spec.max;}
+    else if(spec.type!=='ids'){input.type=spec.type==='boolean'?'checkbox':spec.type==='string'?'text':spec.type; if(spec.type==='number'){input.min=spec.min;if(spec.max!==undefined)input.max=spec.max;input.required=true;}if(spec.max&&spec.type==='string')input.maxLength=spec.max;}
     else input.rows=3;
     const overridden=Object.hasOwn(data.override,key),value=overridden?data.override[key]:data.inherited[key];
     const setValue=v=>{if(spec.type==='boolean')input.checked=!!v;else input.value=Array.isArray(v)?v.join('\n'):v??'';};
@@ -53,6 +54,7 @@ function paintPolicy(data){
     cards.get(spec.section).append(row);
   }
   $('policy-save').disabled=false;$('policy-reset').disabled=false;
+  mountMemoryBudget($);
   const updateQuiet=()=>{for(const key of ['voiceQuietStart','voiceQuietEnd'])$('policy-'+key).closest('.policy-row').hidden=$('policy-voiceQuietMode').value!=='scheduled';};
   $('policy-voiceQuietMode').addEventListener('change',updateQuiet);
   $('override-voiceQuietMode')?.addEventListener('change',updateQuiet);updateQuiet();
@@ -268,6 +270,7 @@ for(const tab of document.querySelectorAll('[data-tab]'))tab.addEventListener('c
   if(name==='manage')loadManagedKeys().catch(e=>notice(e.message,true));
   if(name==='qq')refreshQQ().catch(e=>notice(e.message,true));
   if(name==='logs')loadLogs().catch(e=>notice(e.message,true));
+  if(name==='connections')checkNativePlugin();
 });
 for(const formId of ['config-form'])$(formId).addEventListener('submit',event=>{
   event.preventDefault();const selected=fields.filter(field=>event.currentTarget.contains($(field))),data={};
@@ -279,6 +282,22 @@ async function recognize(buffer){$('voice-progress').textContent='正在使用�
 $('transcribe').addEventListener('click',()=>action($('transcribe'),async()=>{const file=$('audio-file').files[0];if(!file)throw Error('请先选择音频');if(file.size>8*1024*1024)throw Error('文件不能超过 8 MiB');await recognize(await file.arrayBuffer());}));
 $('recognize-generated').addEventListener('click',()=>action($('recognize-generated'),async()=>{const response=await fetch(generatedUrl);if(!response.ok)throw Error('生成的音频已过期，请重新生成');await recognize(await response.arrayBuffer());}));
 $('probe').addEventListener('click',()=>action($('probe'),async()=>{const result=await request('/api/dsh/probe',{});$('presets').hidden=false;$('presets').textContent=JSON.stringify(result.presets,null,2);notice('DSH 连接成功，下方显示可用预设。');}));
+async function checkNativePlugin(){
+  const button=$('native-plugin-check');if(button.disabled)return;button.disabled=true;
+  $('native-plugin-state').textContent='正在检查…';
+  // Clear previous results so a failed refresh cannot display an old success.
+  $('native-service-version').textContent='—';$('native-plugin-version').textContent='—';$('native-plugin-mode').textContent='';
+  try{
+    const data=await request('/api/dsh/native-status',{});
+    const labels={ready:'已就绪',disabled:'已关闭',missing:'未安装',unreachable:'未连接',unavailable:'未就绪',mismatch:'版本不一致',unknown:'无法确认'};
+    $('native-plugin-state').textContent=(labels[data.state]??'无法确认')+' · '+data.message;
+    $('native-service-version').textContent=data.serviceVersion;
+    $('native-plugin-version').textContent=data.pluginVersion??'未读取';
+    $('native-plugin-mode').textContent='当前调用方式：'+(data.nativeMode?'原生执行请求与工具':'旧版兼容模式')+(data.compatible===true?' · 版本和构建一致':'');
+  }catch(error){$('native-plugin-state').textContent='检查失败 · '+error.message;}
+  finally{button.disabled=false;}
+}
+$('native-plugin-check').addEventListener('click',checkNativePlugin);
 function paintChannels(bridge){
  const running=bridge.state==='running',connecting=bridge.state==='connecting',channels=bridge.channels??{};
  const text='私聊：'+(running&&channels.private?'接收中':'已停止')+' · 群聊：'+(running&&channels.group?'接收中':'已停止');

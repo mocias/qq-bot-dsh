@@ -1,0 +1,6 @@
+- insert:
+    - id: qq-rsi-native
+      name: dsh-qq-rsi-native
+      config:
+        # The unified installer fills in the deployment's release manifest.
+        releaseManifest: ""

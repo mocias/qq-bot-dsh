@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
 import { localSessionCookie } from './local-dsh-auth.mjs';
+import {nativeCallback} from './native-callback.mjs';
+import {VERSION,PROTOCOL,BUILD_ID} from '../../native-dsh-plugin/lib/schema.mjs';
 
 export function presetIds(result){
   const rows=Array.isArray(result)?result:result?.presets;
@@ -37,13 +39,13 @@ export class DshClient {
     this.systemLog?.record('rpc.'+operation+'.started',{component:'dsh'});
     try {
     await this.authenticate();
-    const args = ['agentPresets/list','permissionPresets/catalog'].includes(method) ? {} : method==='commands/execute'?request:{ [method === 'session/list' ? '_request' : 'request']: request };
+    const args = ['agentPresets/list','permissionPresets/catalog','pluginManager/listBundles'].includes(method) ? {} : method==='commands/execute'?request:{ [method === 'session/list' ? '_request' : 'request']: request };
     let response;
     try {
       response = await fetch(new URL('/api/'+method, this.config.dshUrl), { method: 'POST', redirect: 'error',
         headers: { 'Content-Type': 'application/json', Cookie: this.cookie },
         body: JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } }), signal: AbortSignal.timeout(15000) });
-    } catch { throw Error('DSH 请求失败或超时'); }
+    } catch(error) { throw Error('DSH 请求失败或超时',{cause:error}); }
     if (!response.ok) { await response.body?.cancel(); this.cookie = ''; throw Error('DSH 返回 HTTP '+response.status); }
     const body = await response.json();
     if (body.type !== 'server-response' || body.rpcId !== rpcId || !body.result?.ok) throw Error('DSH 未接受 '+method+' 请求，请在 DSH 中检查预设和会话');
@@ -53,7 +55,33 @@ export class DshClient {
       this.systemLog?.record('rpc.'+operation+'.failed',{component:'dsh',level:'error',durationMs:Date.now()-started});throw error;
     }
   }
-  async probe() { return this.rpc('agentPresets/list'); }
+  async nativeStatus(){
+    const status={name:'QQ RSI 轻量插件',packageName:'dsh-qq-rsi-native',serviceVersion:VERSION,
+      nativeMode:!!this.config.dshNativeTools,state:'unreachable',installed:null,enabled:null,pluginVersion:null,compatible:null};
+    let bundles;
+    try{bundles=await this.rpc('pluginManager/listBundles');}
+    catch{return {...status,message:'无法读取 DSH 插件列表。请确认 DSH 已启动、地址正确且登录有效。'};}
+    if(!Array.isArray(bundles))return {...status,state:'unknown',message:'DSH 插件列表格式不兼容，请检查 DSH 版本。'};
+    const bundle=bundles.find(x=>x.name===status.packageName);
+    if(!bundle)return {...status,state:'missing',installed:false,message:'未登记插件。请使用服务的统一安装或更新入口补齐插件。'};
+    Object.assign(status,{installed:!!bundle.installed,enabled:!!bundle.enabled,pluginVersion:bundle.version??null});
+    if(bundle.error)return {...status,state:'unavailable',message:'DSH 无法加载此插件包，请在 DSH 插件设置中查看错误。'};
+    if(!bundle.enabled)return {...status,state:'disabled',message:'插件已关闭。请在 DSH 的已安装插件中启用“QQ RSI 轻量插件”。'};
+    let live;
+    try{live=await this.rpc('qqRsiNative/probe');}
+    catch{return {...status,state:'unavailable',message:'插件已启用但尚未就绪。请检查 DSH 插件错误，必要时重载 DSH。'};}
+    status.pluginVersion=live.version;
+    status.compatible=live.version===VERSION&&bundle.version===VERSION&&live.protocol===PROTOCOL&&live.buildId===BUILD_ID;
+    return {...status,state:status.compatible?'ready':'mismatch',active:Number(live.active)||0,
+      message:status.compatible?(status.nativeMode?'插件已就绪，版本与构建均和服务一致。':'插件已就绪，但本服务仍使用兼容模式；请通过统一更新入口启用原生模式。'):'插件与服务版本或构建不一致，请一起更新后重试。'};
+  }
+  async probe() {
+    if(this.config.dshNativeTools){
+      let result;try{result=await this.rpc('qqRsiNative/probe');}catch{throw Error('DSH原生适配插件未就绪，请通过统一发布入口安装/更新；不会退回JSON提示词模式');}
+      if(result?.version!==VERSION||result?.protocol!==PROTOCOL||result?.buildId!==BUILD_ID)throw Error('DSH插件与QQ服务版本或构建不一致，请一起更新');
+    }
+    return this.rpc('agentPresets/list');
+  }
   async applyPermission(sessionId,preset){
     if(!['read-only','workspace-write','danger-full-access'].includes(preset))throw Error('新对话权限选项无效');
     const catalog=await this.rpc('permissionPresets/catalog');
@@ -95,6 +123,10 @@ export class DshClient {
     if(this.runs.has(sessionId))throw Error('同一 DSH 会话已有运行任务');
     await this.authenticate();
     if(options.signal?.aborted)throw Object.assign(Error('后台整理已让路'),{cancelled:true,acknowledged:true});
+    const native=!!this.config.dshNativeTools,runId=randomUUID();
+    if(native&&!options.nativeTools)throw Error('原生回合缺少宿主工具上下文');
+    const callback=native?await nativeCallback({sessionId,runId,allowed:options.nativeTools.allowed,
+      execute:options.nativeTools.execute,signal:options.signal}):null;
     const url = new URL('/api/remote.mux', this.config.dshUrl); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = new WebSocket(url, { headers: { Cookie: this.cookie }, maxPayload: 8*1024*1024, handshakeTimeout: 10000, followRedirects: false });
     this.sockets.add(socket);
@@ -120,7 +152,9 @@ export class DshClient {
       if(settled)throw Error('当前回合已结束');
       const id=randomUUID();inputs.set(id,null);pendingRPC++;
       try{
-        const result=await this.rpc('session/prompt',{sessionId,mode,requestId:id,clientTimeZone:'Asia/Shanghai',content:[{type:'text',text:`[QQ_INPUT:${id}]\n${content}`},...(mode==='queue'?(options.images??[]):[])]},id);
+        const request={sessionId,mode,requestId:id,clientTimeZone:'Asia/Shanghai',content:[{type:'text',text:`[QQ_INPUT:${id}]\n${content}`},...(mode==='queue'?(options.images??[]):[])]};
+        const result=await this.rpc(native?'qqRsiNative/submit':'session/prompt',native?{...request,
+          runId,version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID,allowed:options.nativeTools.allowed,callback:{url:callback.url,token:callback.token}}:request,id);
         if(result?.command)throw Error('桥接内容不应触发 DSH 命令');
         if(abortRequested)await this.cancel(sessionId);
       }catch(error){reject(error);throw error;}finally{pendingRPC--;complete();}
@@ -177,6 +211,14 @@ export class DshClient {
       await ready;if(options.signal?.aborted)throw Object.assign(Error('后台整理已让路'),{cancelled:true,acknowledged:true});submitted = true;run.accepting=true;
       await run.submit(text,'queue');
       return await finished;
-    } finally { run.accepting=false;this.runs.delete(sessionId);options.signal?.removeEventListener('abort',abort);clearTimeout(readyTimer); clearTimeout(turnTimer); this.sockets.delete(socket); socket.close(); }
+    } finally {
+      run.accepting=false;this.runs.delete(sessionId);options.signal?.removeEventListener('abort',abort);
+      clearTimeout(readyTimer);clearTimeout(turnTimer);this.sockets.delete(socket);socket.close();
+      if(callback){
+        await callback.close();
+        try{await this.rpc('qqRsiNative/release',{sessionId,runId});}
+        catch{this.systemLog?.record('native.release.failed',{component:'dsh',level:'warn'});}
+      }
+    }
   }
 }

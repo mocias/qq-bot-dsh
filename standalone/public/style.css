@@ -15,5 +15,6 @@ dialog{border:1px solid #d4dfd3;border-radius:14px;padding:28px;max-width:520px;
 #system-logs{max-height:560px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#162a24;color:#d8eee2;padding:20px;border-radius:10px;font-size:12px;line-height:1.9}
 .policy-row p{font-size:13px;line-height:1.7;color:#667b70;margin:10px 0}
 .chat-inbox-preview{max-height:280px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+.memory-budget{background:#f5f8f6;border-radius:10px;padding:18px;margin:16px 0}.memory-budget h3{margin-top:0}.memory-budget[data-warning="true"] #memory-budget-warning{color:#9b4e0b;font-weight:600}
 
 .related-log{max-height:360px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#162a24;color:#d8eee2;padding:18px;border-radius:10px;font-size:12px;line-height:1.8}.log-file{margin:12px 0}.log-file summary{cursor:pointer;overflow-wrap:anywhere}

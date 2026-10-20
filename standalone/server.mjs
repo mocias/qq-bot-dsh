@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { defaults, readJson, writeJson, validate, publicConfig } from './lib/config.mjs';
-import { LocalVoice } from './lib/voice.mjs';
+import { VoiceService } from './lib/voice-service.mjs';
 import { Bridge } from './lib/bridge.mjs';
 import { DshClient } from './lib/dsh.mjs';
 import { importedStores } from './lib/import-memory.mjs';
@@ -21,7 +21,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export function createApp({ root = path.dirname(here), runtime = path.join(here,'.runtime'), voice: injectedVoice, bridge: injectedBridge } = {}) {
   const configFile=path.join(runtime,'config.private.json');
   let config=validate(readJson(configFile, defaults));
-  const voice=injectedVoice || new LocalVoice(root,runtime), bridge=injectedBridge || new Bridge(runtime,{voice});
+  const voice=injectedVoice || new VoiceService(root,runtime), bridge=injectedBridge || new Bridge(runtime,{voice});
   const desktop=new DesktopQQ(runtime),management=new Management(runtime);
   function keys(){
     const values=new Set(),dir=path.join(runtime,'memories');
@@ -34,6 +34,13 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
     if(writing&&(bridge.jobs?.has(key)||bridge.queues?.has(key)||bridge.maintenance?.has(key)))throw Error('该聊天正在处理消息，请稍后编辑');
   }
   function managed(key){checkKey(key);return {detail:management.inspect(key),knowledge:new Knowledge(runtime,key).read()};}
+  function idleConfig(){
+    if(bridge.status.state!=='stopped'||bridge.status.active||voice.busy)throw Error('请先停止 QQ 连接并等待语音及消息任务完成，再修改配置');
+  }
+  function audioInput(input,max=12*1024*1024){
+    if(typeof input.audio!=='string'||input.audio.length>max||!/^[A-Za-z0-9+/]+={0,2}$/.test(input.audio))throw Error('音频格式不正确');
+    return Buffer.from(input.audio,'base64');
+  }
   const token=randomBytes(32).toString('hex'), cookie=randomBytes(32).toString('hex');
   const assets = new Map([['/', ['text/html; charset=utf-8','index.html']], ['/app.js',['text/javascript; charset=utf-8','app.js']], ['/style.css',['text/css; charset=utf-8','style.css']]]);
   function json(res,status,value) { res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'}); res.end(JSON.stringify(value)); }
@@ -63,6 +70,11 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         const [type,file]=assets.get(url.pathname); res.writeHead(200,{'Content-Type':type}); res.end(fs.readFileSync(path.join(here,'public',file))); return;
       }
       if (req.method==='GET' && url.pathname==='/api/status') { json(res,200,{config:publicConfig(config),voice:voice.status(config),bridge:bridge.status,lifecycle:bridge.summary?.()??[],imports:importedStores(runtime)}); return; }
+      if(req.method==='GET'&&url.pathname==='/api/voice/references'){json(res,200,{references:voice.listReferences()});return;}
+      if(req.method==='GET'&&url.pathname.startsWith('/api/voice/reference/')){
+        const {meta,bytes}=voice.reference(url.pathname.slice('/api/voice/reference/'.length));
+        res.writeHead(200,{'Content-Type':meta.format==='mp3'?'audio/mpeg':'audio/wav','Content-Length':bytes.length});res.end(bytes);return;
+      }
       if(req.method==='GET'&&url.pathname==='/api/memory'){
         const dir=path.join(runtime,'memories'),keys=[];
         if(fs.existsSync(dir))for(const entry of fs.readdirSync(dir,{withFileTypes:true})){
@@ -104,13 +116,17 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
           await bridge.call('add_custom_face',{file:'base64://'+bytes.toString('base64')});
         }else throw Error('未知管理操作');
         json(res,200,managed(input.key));
-      }else if (url.pathname==='/api/config') {
-        if(bridge.status.state!=='stopped') throw Error('请先停止 QQ 连接，再修改配置');
-        const next=validate(input,config); writeJson(configFile,next); config=next; json(res,200,{config:publicConfig(config)});
+      }else if (url.pathname==='/api/config'||url.pathname==='/api/voice/config') {
+        idleConfig();
+        const voiceFields=['voice','model','voiceProvider','mimoApiKey','mimoTtsMode','mimoVoice','mimoReferenceId','mimoStyle','mimoAsrLanguage','clearMimoApiKey'];
+        const patch=url.pathname==='/api/voice/config'?Object.fromEntries(Object.entries(input).filter(([key])=>voiceFields.includes(key))):input;
+        const next=validate(patch,config); voice.checkConfig?.(next);
+        writeJson(configFile,next); config=next; json(res,200,{config:publicConfig(config)});
+      } else if(url.pathname==='/api/voice/references'){
+        json(res,200,{reference:voice.uploadReference(audioInput(input),input.name)});
       } else if (url.pathname==='/api/voice/synthesize') json(res,200,await voice.synthesize(input.text,config));
       else if (url.pathname==='/api/voice/transcribe') {
-        if(typeof input.audio!=='string' || input.audio.length>12*1024*1024 || !/^[A-Za-z0-9+/]+={0,2}$/.test(input.audio)) throw Error('音频格式不正确');
-        json(res,200,await voice.transcribe(Buffer.from(input.audio,'base64'),config));
+        json(res,200,await voice.transcribe(audioInput(input),config));
       } else if (url.pathname==='/api/dsh/probe') {
         const dsh=new DshClient(config);
         try { const presets=await dsh.probe(); json(res,200,{ok:true,presets}); } finally { dsh.close(); }

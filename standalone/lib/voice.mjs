@@ -70,7 +70,7 @@ export class LocalVoice {
     try{
       await run(config.ffmpegPath||'ffmpeg',['-nostdin','-v','error','-i',file,'-t','120','-ar','16000','-ac','1','-y',converted],{windowsHide:true,timeout:30000,maxBuffer:65536});
       return await this.transcribe(fs.readFileSync(converted),config);
-    }catch{throw Error('QQ 语音转换或识别失败，请检查 ffmpeg 和本地模型');}
+    }catch{throw Error(config.voiceProvider==='mimo'?'QQ 语音转换或识别失败，请检查 ffmpeg 和 MiMo 配置':'QQ 语音转换或识别失败，请检查 ffmpeg 和本地模型');}
     finally{fs.rmSync(converted,{force:true});}
   }
   audio(id) {

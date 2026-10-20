@@ -8,7 +8,7 @@ import { MemoryStore, decodeReply, preparePrompt } from './memory.mjs';
 import { initializeLife, noteArrival, observeCompaction, maintain, due } from './lifecycle.mjs';
 import { verifyQQ } from './onebot.mjs';
 import { Media } from './media.mjs';
-import { LocalVoice } from './voice.mjs';
+import { VoiceService } from './voice-service.mjs';
 import { Proactive,groupRateAllowed } from './proactive.mjs';
 import {parseCqString} from '../../dsh-onebot-source/lib/cq.js';
 import {Knowledge} from './knowledge.mjs';
@@ -46,7 +46,7 @@ export class Bridge {
     this.state.retired??=[];this.state.rotations??={};
     this.state.groupSendTimes??={};this.state.reminders??=[];
     this.reminders=new ReminderRelay({reserve:(id,session)=>{const token=(session.backend??this.config.dshUrl)+'/'+id;if(this.state.reminders.includes(token))return false;this.state.reminders.push(token);this.state.reminders=this.state.reminders.slice(-10000);this.persist();return true;},deliver:(session,text,id)=>this.deliverReminder(session,text,id),onError:error=>{this.status.lastError=error.message;}});
-    this.media=media??new Media(runtime,{call:(...args)=>this.call(...args),voice:voice??new LocalVoice(path.resolve(runtime,'../..'),runtime),now});
+    this.media=media??new Media(runtime,{call:(...args)=>this.call(...args),voice:voice??new VoiceService(path.resolve(runtime,'../..'),runtime),now});
     this.proactive=proactive??new Proactive(runtime,{now});this.backgrounds=new Map();
     for(const session of Object.values(this.state.sessions)){
       if(!session.route)continue;

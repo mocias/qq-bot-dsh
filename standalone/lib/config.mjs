@@ -8,6 +8,8 @@ export const defaults = {
   adminUsers: [], qqFiles: false, groupAmbientEnabled: false, groupAmbientDelaySeconds: 10, groupAmbientMinMinutes: 5, groupToolsEnabled: false, knowledgeEnabled: false, remindersEnabled: false,
   privateUsers: [], groups: [], privatePreset: '', groupPreset: '',
   voice: 'Microsoft Huihui Desktop', model: 'small',
+  voiceProvider: 'local', mimoApiKey: '', mimoTtsMode: 'preset', mimoVoice: 'mimo_default',
+  mimoReferenceId: '', mimoStyle: '', mimoAsrLanguage: 'auto',
   memoryEnabled: true, memoryIdleMinutes: 30, rotateAfterCompactions: 15,
   rotationEnabled: true, privateMessagePolicy: 'steer', groupMessagePolicy: 'queue',
   qqImages: true, qqForward: true, qqVoiceReceive: true, qqVoiceSend: true,
@@ -27,7 +29,7 @@ export function localUrl(value, schemes) {
   return url.origin;
 }
 export function validate(input, previous = defaults) {
-  const out = { ...previous };
+  const out = { ...defaults, ...previous };
   for (const field of Object.keys(defaults)) {
     if (!(field in input)) continue;
     const value = input[field];
@@ -45,12 +47,19 @@ export function validate(input, previous = defaults) {
       if(!Number.isInteger(value)||value<(zero?0:1)||value>max) throw Error('时间或次数设置超出范围'); out[field]=value;
     } else {
       if (typeof value !== 'string' || value.length > 4096) throw Error('配置字段格式不正确');
-      if (field.endsWith('Token') && value === '') continue;
+      if ((field.endsWith('Token') || field==='mimoApiKey') && value.trim() === '') continue;
       out[field] = value.trim();
     }
   }
   if (input.clearDshToken === true) out.dshToken = '';
   if (input.clearQqToken === true) out.qqToken = '';
+  if (input.clearMimoApiKey === true) out.mimoApiKey = '';
+  if(!['local','mimo'].includes(out.voiceProvider))throw Error('请选择本地模式或 MiMo API');
+  if(!['preset','clone'].includes(out.mimoTtsMode))throw Error('请选择预置音色或参考录音');
+  if(!['mimo_default','冰糖','茉莉','苏打','白桦','Mia','Chloe','Milo','Dean'].includes(out.mimoVoice))throw Error('请选择支持的 MiMo 音色');
+  if(!['auto','zh','en'].includes(out.mimoAsrLanguage))throw Error('识别语言无效');
+  if(out.mimoReferenceId&&!/^[0-9a-f-]{36}$/.test(out.mimoReferenceId))throw Error('参考录音编号无效');
+  if(out.mimoStyle.length>500||/[\r\n]/.test(out.mimoApiKey))throw Error('MiMo 配置格式不正确');
   out.dshUrl = localUrl(out.dshUrl, ['http:', 'https:']);
   out.qqUrl = localUrl(out.qqUrl, ['ws:', 'wss:']);
   if(out.botQQ && !/^\d{5,20}$/.test(out.botQQ)) throw Error('机器人 QQ 号码格式不正确');
@@ -64,8 +73,8 @@ export function validate(input, previous = defaults) {
   return out;
 }
 export function publicConfig(config) {
-  const { dshToken, qqToken, ...rest } = config;
-  return { ...rest, dshTokenConfigured: !!dshToken, qqTokenConfigured: !!qqToken };
+  const { dshToken, qqToken, mimoApiKey, ...rest } = config;
+  return { ...rest, dshTokenConfigured: !!dshToken, qqTokenConfigured: !!qqToken, mimoApiKeyConfigured: !!mimoApiKey };
 }
 export function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

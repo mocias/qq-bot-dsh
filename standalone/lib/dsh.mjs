@@ -55,6 +55,22 @@ export class DshClient {
   }
   async cancel(sessionId) { return this.rpc('session/cancel',{sessionId}); }
   async rename(sessionId,title) { return this.rpc('session/rename',{sessionId,title}); }
+  watch(sessionId,onEvent,onError){
+    let socket,timer,closed=false,ready=false;
+    const close=()=>{closed=true;clearTimeout(timer);if(socket){this.sockets.delete(socket);socket.close();}};
+    (async()=>{
+      await this.authenticate();if(closed)return;
+      const url=new URL('/api/remote.mux',this.config.dshUrl);url.protocol=url.protocol==='https:'?'wss:':'ws:';
+      socket=new WebSocket(url,{headers:{Cookie:this.cookie},maxPayload:8*1024*1024,handshakeTimeout:10000,followRedirects:false});this.sockets.add(socket);
+      const streamId=randomUUID();
+      const fail=()=>{if(!closed){close();onError(Error('闹钟订阅断开，下一次巡检重新订阅；断线期间不补发'));}};
+      timer=setTimeout(fail,15000);timer.unref?.();
+      socket.on('error',fail);socket.on('close',fail);
+      socket.on('open',()=>socket.send(JSON.stringify({type:'open',streamId,endpoint:'session/follow',payload:{args:{request:{address:{kind:'session',sessionId},maxMessages:20}}}})));
+      socket.on('message',bytes=>{try{const f=JSON.parse(bytes);if(f.streamId!==streamId||closed)return;if(f.type==='end'||f.type==='error'){fail();return;}if(f.type!=='item')return;if(f.value?.type==='snapshot'){ready=true;clearTimeout(timer);return;}if(ready&&f.value?.type==='event')onEvent(f.value.event);}catch{fail();}});
+    })().catch(error=>{if(!closed){close();onError(error);}});
+    return close;
+  }
   async prompt(sessionId, text, options = {}) {
     if(this.runs.has(sessionId))throw Error('同一 DSH 会话已有运行任务');
     await this.authenticate();

@@ -25,12 +25,12 @@ test('config preserves and redacts credentials, validates destinations and expli
   for(const dshUrl of ['https://example.com','http://127.0.0.1/?token=secret','http://name:pass@localhost','file:///etc/passwd'])assert.throws(()=>validate({dshUrl}));
   assert.throws(()=>validate({groups:['../private']}));
 });
-test('routing excludes self, non-allowlisted users, unmentioned groups, empty audio and CQ strings',()=>{
+test('routing excludes self, non-allowlisted users, unmentioned groups, disabled audio; parses CQ strings',()=>{
   const config={...defaults,privateUsers:['234567'],groups:['345678']};
   assert.equal(routeMessage(event(),config).key,'123456/private/234567');
   assert.equal(routeMessage(event({user_id:123456}),config),null);
   assert.equal(routeMessage(event({user_id:987654}),config),null);
-  assert.equal(routeMessage(event({message:'[CQ:at,qq=123456] hello'}),config),null);
+  assert.equal(routeMessage(event({message:'[CQ:at,qq=123456] hello'}),config).text,'hello');
   assert.equal(routeMessage(event({message:[{type:'record',data:{file:'x'}}]}),config).hasMedia,true);
   assert.equal(routeMessage(event({message:[{type:'record',data:{file:'x'}}]}),{...config,qqVoiceReceive:false}),null);
   assert.equal(routeMessage(event({message_type:'group',group_id:345678}),config),null);

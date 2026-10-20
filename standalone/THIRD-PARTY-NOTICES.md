@@ -35,3 +35,7 @@ The explicitly enabled local DSH browser-session authentication follows the prot
 # Migrated QQ policies
 
 Version 0.4 imports the original `dsh-plugin-memory-source/lib/recall-policy.js` and `recall-nudge.js`, `dsh-group-social/lib/{images,security,core}.mjs`, and `dsh-companion-voice/lib/core.mjs`. These are the preserved source modules in this repository, not reimplementations labelled as originals. Their own license notices and module attribution remain in the source directories. The DSH/Cordis plugin entry points are not started by these imports.
+
+# Version 0.5
+
+QQ CQ parsing and face labels import the preserved dsh-onebot-source/lib/cq.js (license in dsh-onebot-source/LICENSE). Group tools import the existing group security, image and public-search validation modules. Per-chat sticker notes and candidate/confirmed/rejected slang workflows were informed by qq-bridge src/bridge.js and src/mcp-snowluma-safe.js at the commit above; they are newly implemented host adapters, not a bundled SnowLuma runtime. DSH schedule source handling was checked against packages/schedule/schedule/src/runtime.ts.

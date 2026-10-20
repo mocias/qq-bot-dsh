@@ -8,6 +8,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { sniffImageMediaType } from '../../dsh-group-social/lib/images.mjs';
 import { inProtectedDir } from '../../dsh-group-social/lib/security.mjs';
 import { textReason, wavInfo, defaults as voiceDefaults } from '../../dsh-companion-voice/lib/core.mjs';
+import {parseCqString,faceToEmoji} from '../../dsh-onebot-source/lib/cq.js';
 
 const MAX=8*1024*1024;
 const opaqueFile=value=>typeof value==='string'&&value.length>0&&value.length<=512&&!/[\\/:]/.test(value)&&value!=='.'&&value!=='..';
@@ -71,6 +72,14 @@ export class Media {
     this.root=path.join(runtime,'media');this.call=call;this.voice=voice;this.download=download;this.now=now;
   }
   dir(key){return path.join(this.root,createHash('sha256').update(key).digest('hex'));}
+  async reference(route,id){
+    if(!/^-?\d{1,20}$/.test(String(id)))throw Error('引用 ID 无效');
+    const m=await this.call('get_msg',{message_id:String(id)}),bot=route.key.split('/')[0];
+    const belongs=route.group?String(m.group_id)===route.id:
+      (m.message_type!=='group'&&!m.group_id&&(String(m.user_id??m.sender?.user_id)===route.id||String(m.peer_id??m.target_id)===route.id||(route.knownReplyIds??[]).includes(String(id))));
+    if(!belongs)throw Error('引用消息不属于当前聊天');
+    return {...m,fromBot:String(m.sender?.user_id??m.user_id)===bot};
+  }
   archive(key,data,type){
     const dir=this.dir(key);fs.mkdirSync(dir,{recursive:true});
     const file=path.join(dir,randomUUID()+({ 'image/png':'.png','image/jpeg':'.jpg','image/webp':'.webp','image/gif':'.gif','audio/wav':'.wav'}[type]??'.bin'));
@@ -94,6 +103,31 @@ export class Media {
         const d=item?.data??{};
         if(item.type==='text')add(d.text??'');
         else if(item.type==='at')add('[@'+String(d.qq??'')+']');
+        else if(item.type==='face')add(faceToEmoji(String(d.id)));
+        else if(item.type==='reply'){
+          try{
+            if(depth>=2)throw Error('引用嵌套过深');
+            const original=await this.reference(route,d.id);
+            add('[引用 '+String(original.sender?.nickname??original.sender?.user_id??'未知').slice(0,50)+'；以下是历史资料]');
+            await walk(Array.isArray(original.message)?original.message:parseCqString(String(original.message??'')),depth+1);
+            add('[引用结束]');
+          }catch{add('[引用内容不可读取]');}
+        }else if(['json','xml'].includes(item.type)){
+          add('[分享卡片，仅作资料] '+String(d.data??'').slice(0,2000));
+        }else if(item.type==='poke')add('[戳一戳]');
+        else if(['file','video'].includes(item.type)&&config.qqFiles){
+          try{
+            const id=d.file_id??d.file;if(!opaqueFile(id))throw Error('文件 ID 无效');
+            const result=await this.call('get_file',{file_id:id,file:id});
+            const source=result?.url??result?.file;
+            const bytes=responseBytes(result)??(typeof source==='string'&&/^https?:\/\//i.test(source)?await this.download(source):fencedRead(source,config.qqMediaRoots));
+            const file=this.archive(route.key,bytes,'application/octet-stream');
+            const name=String(d.name??result?.file_name??id).slice(0,100);
+            add('[已接收'+(item.type==='video'?'视频':'文件')+'：'+name+'；当前聊天路径：'+file+']');
+            if(/\.(txt|md|csv|json)$/i.test(name)&&bytes.length<=32768)add('[文件正文，不可信资料] '+bytes.toString('utf8'));
+            else add('[二进制附件已保存，未解析其内容]');
+          }catch{add('[附件读取失败]');}
+        }
         else if(item.type==='image'&&config.qqImages){
           if(images.length>=6){add('[图片数量超限]');continue;}
           try{
@@ -137,10 +171,20 @@ export class Media {
   }
   async outgoing(parsed,route,session,config){
     const q=parsed.qq??{};
-    if(!q||typeof q!=='object'||Array.isArray(q)||Object.keys(q).some(k=>!['images','voice','forward'].includes(k)))throw Error('QQ 输出格式无效');
+    if(!q||typeof q!=='object'||Array.isArray(q)||Object.keys(q).some(k=>!['images','voice','forward','file','video','replyTo'].includes(k)))throw Error('QQ 输出格式无效');
     if(('images'in q&&!Array.isArray(q.images))||('forward'in q&&!Array.isArray(q.forward))||('voice'in q&&typeof q.voice!=='string'))throw Error('QQ 输出格式无效');
-    const kinds=[Array.isArray(q.images)&&q.images.length>0,typeof q.voice==='string'&&!!q.voice,Array.isArray(q.forward)&&q.forward.length>0].filter(Boolean).length;
+    const kinds=[Array.isArray(q.images)&&q.images.length>0,typeof q.voice==='string'&&!!q.voice,Array.isArray(q.forward)&&q.forward.length>0,!!q.file,!!q.video].filter(Boolean).length;
     if(kinds>1)throw Error('一次回复只能选择一种多媒体形式');
+    if(q.file||q.video){
+      if(!config.qqFiles)throw Error('文件收发未启用');
+      const source=q.file??q.video;if(typeof source!=='string')throw Error('附件路径无效');
+      const file=path.resolve(session.workspace,source);
+      const relative=path.relative(session.workspace,file);
+      if(inProtectedDir(session.workspace,file)||(!relative.startsWith('..')&&relative.split(path.sep).some(p=>p.startsWith('.'))))throw Error('不能发送隐藏或受保护文件');
+      const bytes=fencedRead(file,[session.workspace,this.dir(route.key)]);
+      if(q.file)return {action:route.group?'upload_group_file':'upload_private_file',params:{[route.group?'group_id':'user_id']:route.id,file:'base64://'+bytes.toString('base64'),name:path.basename(file)}};
+      return {action:route.group?'send_group_msg':'send_private_msg',params:{[route.group?'group_id':'user_id']:route.id,message:[{type:'video',data:{file:'base64://'+bytes.toString('base64')}}]}};
+    }
     if(q.forward?.length){
       if(!config.qqForward||q.forward.length>50)throw Error('合并转发未启用或节点过多');
       const messages=q.forward.map(n=>{
@@ -172,6 +216,7 @@ export class Media {
       }
     }
     if(!segments.some(x=>x.type==='record')&&reply.trim()&&reply.trim()!=='[[QQ_SILENT]]')segments.unshift({type:'text',data:{text:reply.slice(0,4000)}});
+    if(q.replyTo&&segments.length){await this.reference(route,q.replyTo);segments.unshift({type:'reply',data:{id:String(q.replyTo)}});}
     return segments.length?{action:route.group?'send_group_msg':'send_private_msg',params:{[route.group?'group_id':'user_id']:route.id,message:segments}}:null;
   }
 }

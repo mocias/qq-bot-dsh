@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 export const defaults = {
   dshUrl: 'http://127.0.0.1:3080', dshToken: '', dshLocalAuth: false,
   qqUrl: 'ws://127.0.0.1:3001', qqToken: '', botQQ: '',
+  adminUsers: [], qqFiles: false, groupAmbientEnabled: false, groupAmbientDelaySeconds: 10, groupAmbientMinMinutes: 5, groupToolsEnabled: false, knowledgeEnabled: false, remindersEnabled: false,
   privateUsers: [], groups: [], privatePreset: '', groupPreset: '',
   voice: 'Microsoft Huihui Desktop', model: 'small',
   memoryEnabled: true, memoryIdleMinutes: 30, rotateAfterCompactions: 15,
@@ -33,12 +34,12 @@ export function validate(input, previous = defaults) {
     if(field==='qqMediaRoots'){
       if(!Array.isArray(value)||value.length>10||value.some(x=>typeof x!=='string'||x.length>1000||!(/^[a-z]:[\\/]/i.test(x)||x.startsWith('/'))||x.startsWith('//')||x.startsWith('\\\\')))throw Error('QQ 媒体目录必须是本机绝对路径');
       out[field]=[...new Set(value)];
-    } else if (field === 'privateUsers' || field === 'groups') {
+    } else if (field === 'privateUsers' || field === 'groups' || field === 'adminUsers') {
       if (!Array.isArray(value) || value.length > 100 || value.some(x => typeof x !== 'string' || !/^\d{5,20}$/.test(x))) throw Error('QQ 号码请使用数字，每行一个');
       out[field] = [...new Set(value)];
-    } else if (['memoryEnabled','rotationEnabled','dshLocalAuth','qqImages','qqForward','qqVoiceReceive','qqVoiceSend','recallEnabled','groupProactiveEnabled'].includes(field)) {
+    } else if (['qqFiles','groupAmbientEnabled','groupToolsEnabled','knowledgeEnabled','remindersEnabled','memoryEnabled','rotationEnabled','dshLocalAuth','qqImages','qqForward','qqVoiceReceive','qqVoiceSend','recallEnabled','groupProactiveEnabled'].includes(field)) {
       if(typeof value!=='boolean') throw Error('开关格式不正确'); out[field]=value;
-    } else if (['memoryIdleMinutes','rotateAfterCompactions','recallMinMinutes','recallMaxMinutes','recallMaxPerDay','groupProactiveMinMinutes','groupProactiveMaxMinutes','groupProactiveMaxPerDay','voiceQuietStart','voiceQuietEnd','groupMinReplyGapSeconds','groupMaxRepliesPerHour'].includes(field)) {
+    } else if (['groupAmbientDelaySeconds','groupAmbientMinMinutes','memoryIdleMinutes','rotateAfterCompactions','recallMinMinutes','recallMaxMinutes','recallMaxPerDay','groupProactiveMinMinutes','groupProactiveMaxMinutes','groupProactiveMaxPerDay','voiceQuietStart','voiceQuietEnd','groupMinReplyGapSeconds','groupMaxRepliesPerHour'].includes(field)) {
       const zero=field.endsWith('PerDay')||field.startsWith('voiceQuiet')||['groupMinReplyGapSeconds','groupMaxRepliesPerHour'].includes(field);
       const max=field.startsWith('voiceQuiet')?23:field.endsWith('PerDay')?100:10080;
       if(!Number.isInteger(value)||value<(zero?0:1)||value>max) throw Error('时间或次数设置超出范围'); out[field]=value;

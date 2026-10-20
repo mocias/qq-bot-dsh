@@ -10,6 +10,11 @@ import { DshClient } from './lib/dsh.mjs';
 import { importedStores } from './lib/import-memory.mjs';
 import { probeQQ } from './lib/onebot.mjs';
 import { MemoryStore } from './lib/memory.mjs';
+import {Management} from './lib/management.mjs';
+import {Knowledge} from './lib/knowledge.mjs';
+import {publicDownload} from './lib/media.mjs';
+import {sniffImageMediaType} from '../dsh-group-social/lib/images.mjs';
+import {publicSearch} from './lib/chat-tools.mjs';
 import { DesktopQQ } from './lib/desktop-qq.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -17,7 +22,18 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
   const configFile=path.join(runtime,'config.private.json');
   let config=validate(readJson(configFile, defaults));
   const voice=injectedVoice || new LocalVoice(root,runtime), bridge=injectedBridge || new Bridge(runtime,{voice});
-  const desktop=new DesktopQQ(runtime);
+  const desktop=new DesktopQQ(runtime),management=new Management(runtime);
+  function keys(){
+    const values=new Set(),dir=path.join(runtime,'memories');
+    if(fs.existsSync(dir))for(const e of fs.readdirSync(dir,{withFileTypes:true}))if(e.isDirectory()&&!e.isSymbolicLink()&&/^[a-f0-9]{64}$/.test(e.name)){const meta=readJson(path.join(dir,e.name,'.runtime','store.json'),null);if(meta?.key)values.add(meta.key);}
+    if(config.botQQ){for(const id of config.privateUsers)values.add(config.botQQ+'/private/'+id);for(const id of config.groups)values.add(config.botQQ+'/group/'+id);}
+    return [...values];
+  }
+  function checkKey(key,writing=false){
+    if(!keys().includes(key))throw Error('请选择已配置或已有记忆的聊天');
+    if(writing&&(bridge.jobs?.has(key)||bridge.queues?.has(key)||bridge.maintenance?.has(key)))throw Error('该聊天正在处理消息，请稍后编辑');
+  }
+  function managed(key){checkKey(key);return {detail:management.inspect(key),knowledge:new Knowledge(runtime,key).read()};}
   const token=randomBytes(32).toString('hex'), cookie=randomBytes(32).toString('hex');
   const assets = new Map([['/', ['text/html; charset=utf-8','index.html']], ['/app.js',['text/javascript; charset=utf-8','app.js']], ['/style.css',['text/css; charset=utf-8','style.css']]]);
   function json(res,status,value) { res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'}); res.end(JSON.stringify(value)); }
@@ -58,12 +74,37 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         if(key&&!keys.includes(key))throw Error('该聊天尚无记忆库');
         json(res,200,{keys,detail:key?new MemoryStore(runtime,key).inspect():null});return;
       }
+      if(req.method==='GET'&&url.pathname==='/api/manage'){
+        const key=url.searchParams.get('key');json(res,200,{keys:keys(),...(key?managed(key):{})});return;
+      }
+      if(req.method==='GET'&&url.pathname==='/api/sticker/image'){
+        const key=url.searchParams.get('key');checkKey(key);const item=new Knowledge(runtime,key).sticker(url.searchParams.get('id'));
+        const bytes=await publicDownload(item.url),type=sniffImageMediaType(bytes);if(!type)throw Error('不支持的图片');res.writeHead(200,{'Content-Type':type});res.end(bytes);return;
+      }
       if (req.method==='GET' && url.pathname.startsWith('/api/audio/')) {
         const audio=voice.audio(url.pathname.slice('/api/audio/'.length)); res.writeHead(200,{'Content-Type':'audio/wav','Content-Length':audio.length}); res.end(audio); return;
       }
       if (req.method!=='POST') { json(res,404,{error:'页面不存在'}); return; }
       const input=await body(req);
-      if (url.pathname==='/api/config') {
+      if(url.pathname.startsWith('/api/manage/')){
+        checkKey(input.key,true);const knowledge=new Knowledge(runtime,input.key);
+        if(url.pathname==='/api/manage/persona')management.savePersona(input);
+        else if(url.pathname==='/api/manage/page')management.savePage(input);
+        else if(url.pathname==='/api/manage/knowledge')knowledge.update(input);
+        else if(url.pathname==='/api/manage/research'){
+          const before=knowledge.read(),entry=before.slang.find(x=>x.id===input.id);if(!entry||input.revision!==before.revision)throw Error('词条已变化，请重新加载');
+          const result=await publicSearch(entry.term+' 网络用语 含义');checkKey(input.key,true);const state=knowledge.read();if(state.revision!==before.revision)throw Error('资料已更新，请重新加载');
+          state.slang.find(x=>x.id===input.id).sources=result.sources;knowledge.save(state);
+        }else if(url.pathname==='/api/manage/favorites'){
+          if(bridge.config?.botQQ!==input.key.split('/')[0]&&bridge.status.account!==input.key.split('/')[0])throw Error('当前登录账号与知识库不匹配');
+          const result=await bridge.call('fetch_custom_face_detail',{count:100});checkKey(input.key,true);knowledge.addFavorites(Array.isArray(result)?result:result?.emojiInfoList);
+        }else if(url.pathname==='/api/manage/collect'){
+          if(bridge.config?.botQQ!==input.key.split('/')[0]&&bridge.status.account!==input.key.split('/')[0])throw Error('当前登录账号与知识库不匹配');
+          const item=knowledge.sticker(input.id),bytes=await publicDownload(item.url);if(!sniffImageMediaType(bytes))throw Error('表情格式不支持');
+          await bridge.call('add_custom_face',{file:'base64://'+bytes.toString('base64')});
+        }else throw Error('未知管理操作');
+        json(res,200,managed(input.key));
+      }else if (url.pathname==='/api/config') {
         if(bridge.status.state!=='stopped') throw Error('请先停止 QQ 连接，再修改配置');
         const next=validate(input,config); writeJson(configFile,next); config=next; json(res,200,{config:publicConfig(config)});
       } else if (url.pathname==='/api/voice/synthesize') json(res,200,await voice.synthesize(input.text,config));

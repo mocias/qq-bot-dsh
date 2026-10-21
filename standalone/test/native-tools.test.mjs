@@ -59,7 +59,6 @@ async function harness(t,respond){
       else if(request.method==='qqRsiNative/probe')result=runtime.probe();
       else if(request.method==='qqRsiNative/submit')result=await runtime.submit(args);
       else if(request.method==='qqRsiNative/release')result=runtime.release(args);
-      else if(request.method==='qqRsiNative/delivery')result=runtime.delivery(args);
       else if(request.method==='session/cancel'){agent.status='idle';emit('turn/end',{turn,reason:{kind:'cancelled'}});result={accepted:true};}
       else throw Error('unexpected endpoint '+request.method);
       res.end(JSON.stringify({type:'server-response',rpcId:request.rpcId,result:{ok:true,value:result}}));
@@ -195,7 +194,7 @@ test('partial and unknown delivery receipts never claim success or resend messag
   assert.equal(count,2);
   const receipt=currentResults(h.agent).join('\n');
   assert.match(receipt,/已发送[\s\S]*成功的一条[\s\S]*发送结果未知[\s\S]*结果未知的一条[\s\S]*未发送[\s\S]*未发送的一条/);
-  const request=h.requests.find(r=>r.method==='qqRsiNative/delivery').payload.args.request;
+  const request=h.requests.find(r=>r.method==='qqRsiNative/release'&&r.payload.args.request.results).payload.args.request;
   assert.deepEqual(h.runtime.delivery(request),{recorded:true});
   assert.throws(()=>h.runtime.delivery({...request,sessionId:'other'}),/有效/);
   assert.throws(()=>h.runtime.delivery({...request,token:'wrong'}),/有效/);

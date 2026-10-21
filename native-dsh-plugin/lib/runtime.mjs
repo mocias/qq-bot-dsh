@@ -74,7 +74,11 @@ export class NativeRuntime{
     }catch(error){this.drop(binding);throw error;}
     return {accepted:true,requestId,source:'plugin:qq-rsi-native'};
   }
-  release({sessionId,runId}){
+  release(request){
+    // Reuse the existing remote entry so an already-loaded stable loader can
+    // adopt this runtime without a DSH-wide restart or a newly registered RPC.
+    if(request?.results!==undefined)return this.delivery(request);
+    const {sessionId,runId}=request;
     const binding=this.bindings.get(sessionId);if(!binding)return {released:true};
     if(binding.runId!==runId)throw Error('执行请求不匹配');
     if(binding.calls.size){

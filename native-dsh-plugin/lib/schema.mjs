@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 // Shared by the adapter and host. No model-provided recipient or callback address.
-export const VERSION='0.16.2';
+export const VERSION='0.16.3';
 export const PROTOCOL=1;
 export const BUILD_ID=(()=>{
   try{return JSON.parse(fs.readFileSync(new URL('../../release.json',import.meta.url))).buildId??'development';}
@@ -12,6 +12,7 @@ const list=()=>({type:'array',items:{type:'string'}});
 const choice=(values,required=true)=>({type:'string',enum:values,required});
 const tool=(name,description,parameters)=>({name,description,parameters});
 export const DEFINITIONS=[
+  tool('qq_no_reply','决定本轮保持沉默并结束；不发送任何QQ消息。不能与本轮发送工具混用。',{}),
   tool('qq_get_recent_messages','查询当前聊天最近消息；仅本机保留的最近500条。',{limit:number(),offset:number()}),
   tool('qq_get_unread_messages','查询当前聊天未读消息；读取不等于标记已读。',{limit:number(),afterSeq:number()}),
   tool('qq_get_my_recent_messages','查询机器人在当前聊天已发出的消息。',{limit:number(),offset:number()}),
@@ -52,9 +53,10 @@ export const DEFINITIONS=[
 export const names=new Set(DEFINITIONS.map(x=>x.name));
 export function selectedTools(config,route,{digest=false}={}){
   if(digest)return ['qq_memory_digest'];
-  if(route.trigger)return [];
+  if(route.trigger)return ['qq_no_reply'];
   return DEFINITIONS.map(x=>x.name).filter(name=>{
     if(name==='qq_memory_digest')return false;
+    if(name==='qq_no_reply')return true;
     if(name==='qq_memory_update')return config.memoryEnabled;
     if(name==='qq_send_media')return true; // Media.outgoing applies each actual capability.
     if(name.startsWith('qq_group_'))return route.group&&config.groupToolsEnabled;

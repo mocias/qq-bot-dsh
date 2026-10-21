@@ -1,6 +1,8 @@
 # qq-bot-dsh
 
-当前发布版本 **0.16.2**。主线为 `standalone/` 独立 Node.js 服务，包含配置面板、QQ 多媒体桥接、长期记忆、插话、会话轮换、按聊天配置和本地/MiMo 语音；配套 `native-dsh-plugin/` 轻量 DSH 插件，两者随同一安装包更新。
+当前发布版本 **0.16.3**。主线为 `standalone/` 独立 Node.js 服务，包含配置面板、QQ 多媒体桥接、长期记忆、插话、会话轮换、按聊天配置和本地/MiMo 语音；配套 `native-dsh-plugin/` 轻量 DSH 插件，两者随同一安装包更新。
+
+0.16.3 修复引用语音混发与“无回复”误发；原生发送工具结束回合后展示实际投递回执，避免模型续写另一版措辞及重复发送。详见[投递规则与限制](docs/DELIVERY-0.16.3.md)。
 
 **独立进程仍依赖 DSH 提供模型推理、Agent 工具循环和权限审批。** 本仓库不是完全脱离 DSH 的 Agent harness。
 
@@ -13,13 +15,13 @@
 
 ## 下载与安装
 
-从本私有仓库的 [Releases](https://github.com/mocias/qq-bot-dsh/releases) 下载 `qq-bot-dsh-0.16.2-windows-portable.zip`。这是 Windows 便携安装包，包含服务、轻量插件、启动/更新脚本及服务的 Node 依赖；不是包含全部环境的 EXE。Node.js 22+、DSH 桌面版及 QQ/NapCat 需要另行安装。压缩包不包含任何账号、密钥、聊天记录、私人记忆或语音模型。
+从本私有仓库的 [Releases](https://github.com/mocias/qq-bot-dsh/releases) 下载 `qq-bot-dsh-0.16.3-windows-portable.zip`。这是 Windows 便携安装包，包含服务、轻量插件、启动/更新脚本及服务的 Node 依赖；不是包含全部环境的 EXE。Node.js 22+、DSH 桌面版及 QQ/NapCat 需要另行安装。压缩包不包含任何账号、密钥、聊天记录、私人记忆或语音模型。
 
-先将压缩包解压到一个新的版本目录，例如 `C:\QQRSI\releases\0.16.2`，进入该目录执行：
+先将压缩包解压到一个新的版本目录，例如 `C:\QQRSI\releases\0.16.3`，进入该目录执行：
 
 ```powershell
 # 选择部署根目录与当前版本，统一启用原生模式
-node scripts/activate-release.mjs "C:\QQRSI" "C:\QQRSI\releases\0.16.2"
+node scripts/activate-release.mjs "C:\QQRSI" "C:\QQRSI\releases\0.16.3"
 
 # 首次安装时登记轻量插件；后两个路径须替换为实际 DSH profile 和安装目录
 node scripts/install-native-plugin.mjs "C:\QQRSI" "<DSH profile目录>" "<DSH安装目录>"

@@ -127,6 +127,7 @@ export class DshClient {
     if(native&&!options.nativeTools)throw Error('原生回合缺少宿主工具上下文');
     const callback=native?await nativeCallback({sessionId,runId,allowed:options.nativeTools.allowed,
       execute:options.nativeTools.execute,signal:options.signal}):null;
+    if(callback)options.nativeTools.onDeliveryReporter?.(results=>this.rpc('qqRsiNative/delivery',{sessionId,runId,token:callback.token,results}));
     const url = new URL('/api/remote.mux', this.config.dshUrl); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = new WebSocket(url, { headers: { Cookie: this.cookie }, maxPayload: 8*1024*1024, handshakeTimeout: 10000, followRedirects: false });
     this.sockets.add(socket);

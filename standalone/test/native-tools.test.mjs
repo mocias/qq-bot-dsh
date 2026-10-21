@@ -18,22 +18,31 @@ const defineTool=process.env.QQ_RSI_DSH_TOOLS_ENTRY?(await import(process.env.QQ
 
 async function harness(t,respond){
   let peer,stream,seq=0,turn=0;const registered=new Map(),listeners=new Map(),requests=[],messages=[];
-  const agent={status:'idle',session:{id:'session'},ctx:{
+  const agent={status:'idle',session:{id:'session',log:[],surface:{nodes:[]},append(type,data,options={}){
+    const event={type,seq:seq++,time:Date.now(),data,...options};this.log.push(event);
+    if(options.surfaceOp==='append')this.surface.nodes.push(event.seq);
+    else if(options.surfaceOp?.op==='replace')this.surface.nodes.splice(this.surface.nodes.indexOf(options.surfaceOp.startSeq),1,event.seq);
+    listeners.get('session/event')?.(this,event);
+    if(peer?.readyState===1)peer.send(JSON.stringify({type:'item',streamId:stream,value:{type:'event',event}}));return event;
+  }},ctx:{
     tools:{presentAs(mode){assert.equal(mode,'native');return ()=>{};},register(def){registered.set(def.name,def);return ()=>registered.delete(def.name);}},
     on(name,fn){listeners.set(name,fn);return ()=>listeners.delete(name);}
   }};
   const runtime=new NativeRuntime({agents:{get:id=>id==='session'?agent:null}},defineTool);
-  function emit(type,data){peer.send(JSON.stringify({type:'item',streamId:stream,value:{type:'event',event:{type,seq:seq++,time:Date.now(),data}}}));}
+  function emit(type,data){return agent.session.append(type,data,{surfaceOp:['assistant/message','user/message','tool/result'].includes(type)?'append':undefined});}
   agent.followup=message=>{
     messages.push(message);agent.status='running';turn++;
     emit('turn/start',{turn});listeners.get('agent/inbox/claimed')?.({message,turn});emit('user/message',message);
     queueMicrotask(async()=>{
       try{
+        let concluded=false;
         const result=await respond({message,registered,agent,emit,turn,call:async(name,args,id='call-1')=>{
           const def=registered.get(name);assert.ok(def,`missing native tool ${name}`);
-          return def.execute(args,{agent,callId:id,signal:new AbortController().signal});
+          const value=await def.execute(args,{agent,callId:id,signal:new AbortController().signal,concludeTurn(){concluded=true;}});
+          emit('tool/result',{turn,message:{id:'tool-'+seq,role:'tool',callId:id,content:def.output.render(args,value)}});
+          return value;
         }});
-        for(const text of Array.isArray(result)?result:[result??''])emit('assistant/message',{turn,message:{id:'answer-'+seq,content:[{type:'text',text}]}});
+        if(!concluded)for(const text of Array.isArray(result)?result:[result??''])emit('assistant/message',{turn,message:{id:'answer-'+seq,content:[{type:'text',text}]}});
         agent.status='idle';emit('turn/end',{turn,reason:{kind:'completed'}});
       }catch(error){agent.status='idle';emit('turn/end',{turn,reason:{kind:'error',message:error.message}});}
     });
@@ -50,6 +59,7 @@ async function harness(t,respond){
       else if(request.method==='qqRsiNative/probe')result=runtime.probe();
       else if(request.method==='qqRsiNative/submit')result=await runtime.submit(args);
       else if(request.method==='qqRsiNative/release')result=runtime.release(args);
+      else if(request.method==='qqRsiNative/delivery')result=runtime.delivery(args);
       else if(request.method==='session/cancel'){agent.status='idle';emit('turn/end',{turn,reason:{kind:'cancelled'}});result={accepted:true};}
       else throw Error('unexpected endpoint '+request.method);
       res.end(JSON.stringify({type:'server-response',rpcId:request.rpcId,result:{ok:true,value:result}}));
@@ -123,6 +133,80 @@ test('native sends are queued, deduplicated by callId, and final text is not sen
   });
   f=bridgeFixture(t,h.config,h.client);await f.bridge.handle(f.route,0);
   assert.deepEqual(text(f.sent),['第一条','第二条']);
+  assert.equal(h.agent.session.log.some(x=>x.type==='assistant/message'),false,'concludeTurn prevents a second model answer');
+  const receipt=currentResults(h.agent).join('\n');
+  assert.match(receipt,/QQ实际投递回执[\s\S]*已发送[\s\S]*第一条[\s\S]*已发送[\s\S]*第二条/);
+});
+
+function currentResults(agent){return agent.session.log.filter(e=>e.type==='tool/result'&&agent.session.surface.nodes.includes(e.seq)).map(e=>e.data.message.content.map(c=>c.text??'').join(''));}
+function audioBytes(){
+  const b=Buffer.alloc(364);b.write('RIFF');b.writeUInt32LE(356,4);b.write('WAVEfmt ',8);b.writeUInt32LE(16,16);b.writeUInt16LE(1,20);b.writeUInt16LE(1,22);b.writeUInt32LE(16000,24);b.writeUInt32LE(32000,28);b.writeUInt16LE(2,32);b.writeUInt16LE(16,34);b.write('data',36);b.writeUInt32LE(320,40);return b;
+}
+test('quoted voice uses two real outbox plans and DSH receipt contains the exact spoken text',async t=>{
+  let f;
+  const h=await harness(t,async({call})=>{
+    await call('qq_send_media',{voice:'这是实际朗读的原句。',replyToMessageId:'1'});
+    assert.equal(f.sent.length,0);return '不应生成的另一版措辞';
+  });
+  f=bridgeFixture(t,{...h.config,qqVoiceSend:true,voiceQuietMode:'never'},h.client);
+  f.bridge.media.voice={synthesize:async text=>{assert.equal(text,'这是实际朗读的原句。');return {id:'audio'};},audio:audioBytes};
+  f.bridge.media.reference=async()=>{};
+  f.bridge.inbox(f.route.key).append({messageId:'1',sourceId:'m1',sender:'100000002',text:'你好'});
+  await f.bridge.handle(f.route,0);
+  assert.deepEqual(f.sent.map(x=>x.params.message.map(m=>m.type)),[['reply','text'],['record']]);
+  assert.equal(f.bridge.state.deliveries.length,2);
+  assert.match(currentResults(h.agent).join('\n'),/已发送[\s\S]*语音回复：[\s\S]*已发送[\s\S]*这是实际朗读的原句。/);
+  assert.equal(h.agent.session.log.some(e=>e.type==='assistant/message'),false);
+});
+test('explicit silence concludes the turn; fallback markers do not become text or voice',async t=>{
+  const h=await harness(t,async({call})=>{await call('qq_no_reply',{});return '（无回复）';});
+  const f=bridgeFixture(t,h.config,h.client);await f.bridge.handle(f.route,0);
+  assert.equal(f.sent.length,0);assert.equal(h.agent.session.log.some(e=>e.type==='assistant/message'),false);
+  const h2=await harness(t,()=>['（无回复）',' ( 无需回复 ) ','[[QQ_SILENT]]']);
+  const f2=bridgeFixture(t,{...h2.config,qqVoiceSend:true,voiceReplyMode:'voice',voiceQuietMode:'never'},h2.client);
+  f2.bridge.media.voice={synthesize:async()=>{assert.fail('silence must not reach TTS');}};
+  await f2.bridge.handle(f2.route,0);assert.equal(f2.sent.length,0);
+});
+test('silence detection preserves real prose and blocks placeholder send tools',async t=>{
+  const h=await harness(t,async({call})=>{
+    await assert.rejects(call('qq_send_message',{messages:['（无回复）']},'a'),/无回复/);
+    await assert.rejects(call('qq_send_media',{voice:'(无回复)'},'b'),/无回复/);
+    return '你看到的“（无回复）”是占位文字。';
+  });
+  const f=bridgeFixture(t,h.config,h.client);await f.bridge.handle(f.route,0);
+  assert.deepEqual(text(f.sent),['你看到的“（无回复）”是占位文字。']);
+});
+test('no-reply cannot erase a queued send or be followed by a send',async t=>{
+  for(const silentFirst of [false,true]){
+    const h=await harness(t,async({call})=>{
+      if(silentFirst){await call('qq_no_reply',{},'a');await assert.rejects(call('qq_send_message',{messages:['不该发送']},'b'),/不能同时发送/);}
+      else{await call('qq_send_message',{messages:['保留原句']},'a');await assert.rejects(call('qq_no_reply',{},'b'),/已有发送计划/);}
+      return '额外正文';
+    });
+    const f=bridgeFixture(t,h.config,h.client);await f.bridge.handle(f.route,0);
+    assert.deepEqual(text(f.sent),silentFirst?[]:['保留原句']);
+  }
+});
+test('partial and unknown delivery receipts never claim success or resend messages',async t=>{
+  const h=await harness(t,async({call})=>{await call('qq_send_message',{messages:['成功的一条','结果未知的一条','未发送的一条']});});
+  const f=bridgeFixture(t,h.config,h.client);let count=0;
+  f.bridge.call=async()=>{if(++count===2)throw Object.assign(Error('disconnect'),{deliveryState:'unknown'});return {message_id:'101'};};
+  await assert.rejects(f.bridge.handle(f.route,0),/结果不确定/);
+  assert.equal(count,2);
+  const receipt=currentResults(h.agent).join('\n');
+  assert.match(receipt,/已发送[\s\S]*成功的一条[\s\S]*发送结果未知[\s\S]*结果未知的一条[\s\S]*未发送[\s\S]*未发送的一条/);
+  const request=h.requests.find(r=>r.method==='qqRsiNative/delivery').payload.args.request;
+  assert.deepEqual(h.runtime.delivery(request),{recorded:true});
+  assert.throws(()=>h.runtime.delivery({...request,sessionId:'other'}),/有效/);
+  assert.throws(()=>h.runtime.delivery({...request,token:'wrong'}),/有效/);
+  assert.equal(count,2);
+});
+test('receipt UI failure does not retry an already delivered QQ message',async t=>{
+  const h=await harness(t,async({call})=>{await call('qq_send_message',{messages:['只发一次']});});
+  h.runtime.delivery=()=>{throw Error('view unavailable');};
+  const f=bridgeFixture(t,h.config,h.client),logs=[];f.bridge.systemLog={record:(...args)=>logs.push(args)};
+  await f.bridge.handle(f.route,0);assert.deepEqual(text(f.sent),['只发一次']);
+  assert.ok(logs.some(x=>x[0]==='delivery.receipt.failed'));
 });
 test('host rejects wrong evidence and callbacks after channel stop',async t=>{
   let f;

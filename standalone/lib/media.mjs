@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import {isSilentReply} from './reply-control.mjs';
 import path from 'node:path';
 import http from 'node:http';
 import https from 'node:https';
@@ -193,9 +194,11 @@ export class Media {
       });
       return {action:route.group?'send_forward_msg':'send_private_forward_msg',params:{[route.group?'group_id':'user_id']:route.id,messages}};
     }
-    let reply=parsed.reply??'',segments=[];
+    let reply=isSilentReply(parsed.reply)?'':parsed.reply??'',segments=[];
+    if(isSilentReply(q.voice))return null;
     const tagged=reply.match(/^\s*\[\[qq_voice\]\]([\s\S]+)\[\[\/qq_voice\]\]\s*$/);
     const voiceText=q.voice??tagged?.[1]??reply;
+    if(isSilentReply(voiceText))return null;
     const policy={...voiceDefaults,enabled:config.qqVoiceSend,mode:config.voiceReplyMode,quietHours:config.voiceQuietMode==='never'?{start:0,end:0}:{start:config.voiceQuietStart,end:config.voiceQuietEnd}};
     const hour=Number(new Intl.DateTimeFormat('en-GB',{hour:'2-digit',hourCycle:'h23',timeZone:'Asia/Shanghai'}).format(new Date(this.now())));
     const quiet=config.voiceQuietMode==='always'||(config.voiceQuietMode!=='never'&&(config.voiceQuietStart<config.voiceQuietEnd?hour>=config.voiceQuietStart&&hour<config.voiceQuietEnd:config.voiceQuietStart>config.voiceQuietEnd&&(hour>=config.voiceQuietStart||hour<config.voiceQuietEnd)));
@@ -230,6 +233,15 @@ export class Media {
     }
     const replyTo=config.quoteMode==='never'?null:(q.replyTo??(config.quoteMode==='always'?route.qqMessageId:null));
     if(replyTo&&segments.length){await this.reference(route,replyTo);segments.unshift({type:'reply',data:{id:String(replyTo)}});}
-    return segments.length?{action:route.group?'send_group_msg':'send_private_msg',params:{[route.group?'group_id':'user_id']:route.id,message:segments}}:null;
+    const make=message=>({action:route.group?'send_group_msg':'send_private_msg',params:{[route.group?'group_id':'user_id']:route.id,message}});
+    const record=segments.find(x=>x.type==='record');
+    if(record){
+      // QQ voice bubbles must stand alone: reply/at mixed with record may hide audio.
+      const voice={...make([record]),transcript:voiceText};
+      const prefix=segments.filter(x=>x.type!=='record');
+      if(prefix.length)return {...make([...prefix,{type:'text',data:{text:'语音回复：'}}]),following:[voice]};
+      return voice;
+    }
+    return segments.length?make(segments):null;
   }
 }

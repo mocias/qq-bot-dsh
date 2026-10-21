@@ -77,6 +77,20 @@ test('quiet modes support all-day silence, unrestricted hours and overnight sche
  assert.throws(()=>validate({voiceQuietMode:'bad'}));
  const cfg=validate({chatPolicy:{group:{voiceQuietMode:'always'},overrides:{'123456/group/234567':{voiceQuietMode:'never'}}}});assert.equal(cfg.chatPolicy.group.voiceQuietMode,'always');
 });
+
+test('group voice quote and mention never share a record bubble; synthesis fallback keeps normal quote',async t=>{
+  const root=temp(t),group={...route,group:true},media=new Media(root,{call:async()=>({user_id:'100000002',group_id:route.id}),voice:{synthesize:async()=>({id:'audio'}),audio:()=>wav()}});
+  media.reference=async()=>{};
+  const config={...defaults,qqVoiceSend:true,groupVoiceSend:true,voiceQuietMode:'never',mentionSend:true};
+  const input={reply:'',qq:{voice:'原句',replyTo:'1',at:'100000002'}};
+  const output=await media.outgoing(input,group,{workspace:root},config);
+  assert.deepEqual(output.params.message.map(x=>x.type),['reply','at','text']);
+  assert.deepEqual(output.following[0].params.message.map(x=>x.type),['record']);
+  media.voice.synthesize=async()=>{throw Error('offline');};
+  const fallback=await media.outgoing(input,group,{workspace:root},config);
+  assert.deepEqual(fallback.params.message.map(x=>x.type),['reply','at','text']);
+  assert.equal(fallback.params.message.at(-1).data.text,'原句');assert.equal(fallback.following,undefined);
+});
 test('original recall scheduler persists reservations, caps daily attempts and waits for real activity',async t=>{
   const root=temp(t);let now=Date.parse('2026-10-20T02:00:00Z');
   const store=new MemoryStore(root,key);

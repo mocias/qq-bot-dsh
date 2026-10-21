@@ -1,4 +1,5 @@
 import {wakeSeconds} from './timing.mjs';
+import {isSilentReply} from './reply-control.mjs';
 export const MESSAGE_GUIDE=`聊天工具（只作用于当前聊天）：
 qq_get_recent_messages {limit:20,offset:0}；qq_get_unread_messages {limit:20,afterSeq:0}；qq_get_my_recent_messages {limit:10}；qq_get_message_detail {messageId:"真实QQ消息ID"} 或 {seq:本地序号}。
 qq_mark_read {throughSeq:已展示的本地序号}；qq_social_state {}；qq_set_wake_config {mode:"active"或"diving",seconds:1800}（须启用潜水）。
@@ -60,6 +61,7 @@ export class MessageTools {
     }
     const messages=tool==='qq_reply'?args.message:args.messages;
     const rows=Array.isArray(messages)?messages:[messages];
+    if(rows.some(isSilentReply))throw Error('无回复标记不能作为消息发送；请选择qq_no_reply');
     if(!rows.length||rows.length>8||rows.some(x=>typeof x!=='string'||!x.trim()||x.length>12000)||this.outputs.length+rows.length>8)throw Error('最多8条非空消息，每条最多12000字');
     if(tool==='qq_reply'&&!args.replyToMessageId)throw Error('请提供引用消息ID');
     let replyTo=args.replyToMessageId;

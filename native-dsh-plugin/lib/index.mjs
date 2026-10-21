@@ -31,8 +31,9 @@ export default class QQRSINative extends TypertRemoteService{
   async probe(request){return (await this.current()).probe();}
   async submit(request){return (await this.current()).submit(request);}
   async release(request){return this.runtime?.release(request)??{released:true};}
+  async delivery(request){if(!this.runtime)throw Error('原执行请求已释放');return this.runtime.delivery(request);}
 }
-for(const name of ['probe','submit','release']){
+for(const name of ['probe','submit','release','delivery']){
   const initializers=[];Remote(name)(undefined,{name,private:false,static:false,addInitializer(fn){initializers.push(fn);}});
   const receiver=Object.create(QQRSINative.prototype);for(const fn of initializers)fn.call(receiver);
 }

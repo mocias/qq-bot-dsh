@@ -1,7 +1,8 @@
 import {VERSION,PROTOCOL,BUILD_ID,DEFINITIONS,names} from './schema.mjs';
+const terminal=name=>/^qq_(send_message|reply|send_media|send_poke|send_sticker|group_send_image|no_reply)$/.test(name);
 
 export class NativeRuntime{
-  constructor(ctx,defineTool){this.ctx=ctx;this.defineTool=defineTool;this.bindings=new Map();}
+  constructor(ctx,defineTool){this.ctx=ctx;this.defineTool=defineTool;this.bindings=new Map();this.receipts=new Map();}
   probe(){return {version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID,active:this.bindings.size};}
   async submit(request){
     const {sessionId,runId,requestId,mode,content,callback,allowed,version,protocol,buildId}=request??{};
@@ -21,13 +22,17 @@ export class NativeRuntime{
     if(binding&&binding.runId!==runId)throw Error('会话已有其他执行请求');
     if(!binding){
       if(mode!=='queue'||agent.status!=='idle')throw Error('新执行请求必须从空闲会话开始');
-      binding={runId,sessionId,agent,callback,allowed,ids:new Set(),claimed:false,disposers:[],expires:Date.now()+240000};
+      binding={runId,sessionId,agent,callback,allowed,ids:new Set(),calls:new Set(),results:new Map(),claimed:false,disposers:[],expires:Date.now()+240000};
       this.bindings.set(sessionId,binding);
       binding.timer=setTimeout(()=>this.drop(binding),240000);binding.timer.unref?.();
       try{
         binding.disposers.push(agent.ctx.tools.presentAs('native'));
         binding.disposers.push(agent.ctx.on('agent/inbox/claimed',({message})=>{
           binding.claimed=message.source?.kind==='plugin:qq-rsi-native'&&message.source?.runId===runId;
+        }));
+        binding.disposers.push(agent.ctx.on('session/event',(session,event)=>{
+          if(binding.claimed&&session===agent.session&&event.type==='tool/result'&&binding.calls.has(event.data.message.callId)&&!binding.results.has(event.data.message.callId)&&!event.data.message.isError)
+            binding.results.set(event.data.message.callId,event);
         }));
         for(const definition of DEFINITIONS.filter(t=>allowed.includes(t.name))){
           binding.disposers.push(agent.ctx.tools.register(this.defineTool({...definition,
@@ -38,6 +43,7 @@ export class NativeRuntime{
             isConcurrencySafe:()=>false,
             execute:async(args,exec)=>{
               if(this.bindings.get(sessionId)!==binding||!binding.claimed||Date.now()>binding.expires||exec.agent!==agent||exec.signal.aborted)throw Error('工具不属于有效的QQ执行回合');
+              if(terminal(definition.name)&&(typeof exec.concludeTurn!=='function'||!agent.session.surface||typeof agent.session.append!=='function'))throw Error('此DSH版本不支持结束回合与投递回执，请更新DSH');
               const response=await fetch(callback.url,{method:'POST',redirect:'error',
                 headers:{'Content-Type':'application/json',Authorization:'Bearer '+callback.token},
                 body:JSON.stringify({sessionId,runId,callId:String(exec.callId),tool:definition.name,args}),
@@ -47,6 +53,10 @@ export class NativeRuntime{
               if(value.images?.length){
                 if(!this.ctx.attachments)throw Error('DSH图片附件服务未就绪');
                 value.images=await this.ctx.attachments.admitPromptContent(value.images);
+              }
+              if(terminal(definition.name)){
+                if(definition.name!=='qq_no_reply'&&!value.result?.duplicate)binding.calls.add(String(exec.callId));
+                exec.concludeTurn();
               }
               return value;
             }
@@ -67,12 +77,40 @@ export class NativeRuntime{
   release({sessionId,runId}){
     const binding=this.bindings.get(sessionId);if(!binding)return {released:true};
     if(binding.runId!==runId)throw Error('执行请求不匹配');
+    if(binding.calls.size){
+      for(const [key,value] of this.receipts)if(value.expires<Date.now())this.receipts.delete(key);
+      if(this.receipts.size>=64)this.receipts.delete(this.receipts.keys().next().value);
+      this.receipts.set(runId,{...binding,expires:Date.now()+600000,done:new Map()});
+    }
     this.drop(binding);return {released:true};
+  }
+  delivery({sessionId,runId,token,results}){
+    const receipt=this.receipts.get(runId);
+    if(!receipt||receipt.sessionId!==sessionId||receipt.callback.token!==token||receipt.expires<Date.now())throw Error('投递回执不属于有效执行请求');
+    if(!Array.isArray(results)||results.length>32||JSON.stringify(results).length>200000)throw Error('投递回执格式无效');
+    for(const row of results){
+      if(!receipt.calls.has(row.callId)||!Array.isArray(row.messages)||row.messages.length>16||row.messages.some(m=>
+        !['sent','failed','unknown','not_sent'].includes(m.state)||typeof m.text!=='string'||m.text.length>50000||
+        (m.qqMessageId!==undefined&&typeof m.qqMessageId!=='string')))throw Error('投递回执内容无效');
+    }
+    for(const row of results){
+      const fingerprint=JSON.stringify(row);
+      if(receipt.done.has(row.callId)){if(receipt.done.get(row.callId)!==fingerprint)throw Error('回执已确认，不能改写');continue;}
+      const session=receipt.agent.session;
+      const original=receipt.results.get(row.callId);
+      if(!original||!session.surface.nodes.includes(original.seq))throw Error('原工具结果不在当前会话中，未修改历史');
+      const labels={sent:'已发送',failed:'发送失败',unknown:'发送结果未知（不会自动重试）',not_sent:'未发送'};
+      const text=row.messages.length?row.messages.map(m=>labels[m.state]+(m.qqMessageId?' · QQ消息 '+m.qqMessageId:'')+'\n'+m.text).join('\n\n'):'未发送任何QQ消息。';
+      session.append('tool/result',{...original.data,message:{...original.data.message,content:[{type:'text',text:'QQ实际投递回执\n'+text}]}},
+        {surfaceOp:{op:'replace',startSeq:original.seq,endSeq:original.seq},sourceEventSeqs:[original.seq]});
+      receipt.done.set(row.callId,fingerprint);
+    }
+    return {recorded:true};
   }
   drop(binding){
     if(this.bindings.get(binding.sessionId)!==binding)return;
     clearTimeout(binding.timer);this.bindings.delete(binding.sessionId);
     for(const dispose of binding.disposers.reverse())dispose();
   }
-  dispose(){for(const binding of [...this.bindings.values()])this.drop(binding);}
+  dispose(){for(const binding of [...this.bindings.values()])this.drop(binding);this.receipts.clear();}
 }

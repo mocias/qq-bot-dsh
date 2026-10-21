@@ -3,7 +3,9 @@ import WebSocket from 'ws';
 import { localSessionCookie } from './local-dsh-auth.mjs';
 import {nativeCallback} from './native-callback.mjs';
 import {VERSION,PROTOCOL,BUILD_ID} from '../../native-dsh-plugin/lib/schema.mjs';
-import {Continuations,CONTINUOUS_TIMEOUT_MS} from '../../native-dsh-plugin/lib/continuations.mjs';
+import {Continuations,isHostContext} from '../../native-dsh-plugin/lib/continuations.mjs';
+import {redactLog} from './diagnostic-logs.mjs';
+const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
 export function presetIds(result){
   const rows=Array.isArray(result)?result:result?.presets;
@@ -49,7 +51,11 @@ export class DshClient {
     } catch(error) { throw Error('DSH 请求失败或超时',{cause:error}); }
     if (!response.ok) { await response.body?.cancel(); this.cookie = ''; throw Error('DSH 返回 HTTP '+response.status); }
     const body = await response.json();
-    if (body.type !== 'server-response' || body.rpcId !== rpcId || !body.result?.ok) throw Error('DSH 未接受 '+method+' 请求，请在 DSH 中检查预设和会话');
+    if (body.type !== 'server-response' || body.rpcId !== rpcId)throw Error('DSH 响应格式或请求标识不匹配');
+    if(!body.result?.ok){
+      const detail=typeof body.result?.error==='string'?body.result.error:body.result?.error?.message;
+      throw Error('DSH 未接受 '+method+' 请求'+(detail?'：'+redactLog(detail,[this.cookie,this.config.dshToken,request.callback?.token]).slice(0,1500):'，请在 DSH 中检查预设和会话'));
+    }
     this.systemLog?.record('rpc.'+operation+'.completed',{component:'dsh',durationMs:Date.now()-started});
     return body.result.value;
     } catch(error) {
@@ -104,6 +110,10 @@ export class DshClient {
     await run.submit(text,'steer',images);return true;
   }
   async cancel(sessionId) { return this.rpc('session/cancel',{sessionId}); }
+  async confirmExit(sessionId,run={}){
+    const result=await this.rpc('qqRsiNative/release',{sessionId,runId:run.runId??'',token:run.token,action:'status'});
+    return result.terminal===true;
+  }
   async rename(sessionId,title) { return this.rpc('session/rename',{sessionId,title}); }
   watch(sessionId,onEvent,onError){
     let socket,timer,closed=false,ready=false;
@@ -130,13 +140,16 @@ export class DshClient {
     const signal=options.signal?AbortSignal.any([options.signal,lifetime.signal]):lifetime.signal;
     if(native&&!options.nativeTools)throw Error('原生回合缺少宿主工具上下文');
     const callback=native?await nativeCallback({sessionId,runId,allowed:options.nativeTools.allowed,
-      execute:options.nativeTools.execute,signal,continuous}):null;
+      execute:options.nativeTools.execute,control:options.nativeTools.control,signal,continuous}):null;
     if(callback)options.nativeTools.onDeliveryReporter?.(results=>this.rpc('qqRsiNative/release',{sessionId,runId,token:callback.token,results}));
     const url = new URL('/api/remote.mux', this.config.dshUrl); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = new WebSocket(url, { headers: { Cookie: this.cookie }, maxPayload: 8*1024*1024, handshakeTimeout: 10000, followRedirects: false });
     this.sockets.add(socket);
     const streamId = randomUUID();
     let readyResolve, readyReject, finishResolve, finishReject, submitted = false, currentTurn, settled=false, abortRequested=false,succeeded=false;
+    let terminalObserved=false,closing=false,heartbeat,renewing=false,cancelTimer,failure,acceptedRequests=0;
+    const cancelTimeoutMs=options.cancelTimeoutMs??30000;
+    const control=action=>this.rpc('qqRsiNative/release',{sessionId,runId,token:callback?.token,action});
     const inputs=new Map(), turns=new Map(),seenEvents=new Set(); let pendingRPC=0,answerEpoch=0,messageOrder=0;
     const ready = new Promise((resolve,reject) => { readyResolve=resolve; readyReject=reject; });
     const finished = new Promise((resolve,reject) => { finishResolve=resolve; finishReject=reject; });
@@ -149,13 +162,13 @@ export class DshClient {
       const ids=[...inputs.values()];if(ids.some(id=>id===null||!turns.get(id)?.ended))return;
       const affected=[...new Set(ids)].map(id=>turns.get(id));
       const bad=affected.find(t=>t.reason!=='completed');
-      if(abortRequested||bad){reject(Object.assign(Error(abortRequested?'后台整理已让路':'DSH 回合未正常完成'),{cancelled:abortRequested,acknowledged:abortRequested&&affected.every(t=>t.ended)}));return;}
-      if(continuous&&(continuations.pending.size||currentTurn!==undefined&&!turns.get(currentTurn)?.ended)){
+      if(abortRequested||bad){terminalObserved=true;reject(Object.assign(Error(abortRequested?'回合已停止':'DSH 回合未正常完成'),{cancelled:abortRequested,acknowledged:true}));return;}
+      if(continuous&&!options.nativeTools.departed?.()&&(continuations.pending.size||currentTurn!==undefined&&!turns.get(currentTurn)?.ended)){
         if(continuations.pending.size&&turns.get(currentTurn)?.ended)options.nativeTools.onAwaitingChild?.();
         return;
       }
       const messages=affected.flatMap(t=>t.messages).filter(m=>m.epoch===answerEpoch).sort((a,b)=>a.order-b.order).map(m=>m.text.trim()).filter(Boolean);
-      settled=true;succeeded=true;run.accepting=false;finishResolve(options.collectMessages?messages:messages.at(-1)||'');
+      terminalObserved=true;settled=true;succeeded=true;run.accepting=false;finishResolve(options.collectMessages?messages:messages.at(-1)||'');
     };
     const run={accepting:false,awaitingChild:()=>continuous&&continuations.pending.size>0&&turns.get(currentTurn)?.ended,submit:async(content,mode,images)=>{
       if(settled)throw Error('当前回合已结束');
@@ -165,21 +178,38 @@ export class DshClient {
         const request={sessionId,mode,requestId:id,clientTimeZone:'Asia/Shanghai',content:[{type:'text',text:`[QQ_INPUT:${id}]\n${content}`},...(images??(inputs.size===1?(options.images??[]):[]))]};
         const result=await this.rpc(native?'qqRsiNative/submit':'session/prompt',native?{...request,
           runId,version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID,allowed:options.nativeTools.allowed,continuous,
+          ...(options.nativeTools.handoff?{handoff:true,handoffPending:!!options.nativeTools.handoffPending,awayRequested:!!options.nativeTools.awayRequested}:{}),
+          ...(options.nativeTools.promptRules?{promptRules:options.nativeTools.promptRules}:{}),
           ...(options.nativeTools.memoryContext?{memoryContext:options.nativeTools.memoryContext()}:{}),callback:{url:callback.url,token:callback.token}}:request,id);
+        if(native&&result?.accepted===false&&result.error?.code==='QQ_SUBMIT_REJECTED'){
+          throw Object.assign(Error('DSH 提交被拒绝：'+redactLog(result.error.message??'未知原因',[this.cookie,this.config.dshToken,callback.token]).slice(0,1500)),{notSubmitted:acceptedRequests===0});
+        }
+        acceptedRequests++;
         if(result?.command)throw Error('桥接内容不应触发 DSH 命令');
-        if(abortRequested)await this.cancel(sessionId);
+        if(native&&!heartbeat&&!closing){
+          heartbeat=setInterval(async()=>{
+            if(closing||renewing)return;renewing=true;
+            try{const result=await control('renew');if(!result.renewed)throw Error('工具续期未确认');}
+            catch(error){if(!closing)reject(Error('QQ回合工具续期失败，等待结束确认',{cause:error}));}
+            finally{renewing=false;}
+          },30000);heartbeat.unref?.();
+        }
+        if(abortRequested){if(native)await control('invalidate');else await this.cancel(sessionId);}
       }catch(error){reject(error);throw error;}finally{pendingRPC--;complete();}
     }};
     this.runs.set(sessionId,run);
     const readyTimer = setTimeout(() => reject(Error('DSH 会话快照超时')), 15000);
-    const turnTimer = setTimeout(() => {
-      if(continuous)lifetime.abort();
-      else reject(Error('DSH 回复超时；如需工具审批，请在 DSH 中处理'));
-    }, options.timeoutMs??(continuous?CONTINUOUS_TIMEOUT_MS:180000));
+    const turnTimer = options.lifecycleBound||continuous?null:setTimeout(() => {
+      reject(Error('DSH 回复超时；如需工具审批，请在 DSH 中处理'));
+    }, options.timeoutMs??180000);
     const abort=()=>{
       abortRequested=true;run.accepting=false;
       if(!submitted){reject(Object.assign(Error('后台整理已让路'),{cancelled:true,acknowledged:true}));return;}
-      this.cancel(sessionId).catch(()=>reject(Object.assign(Error('后台整理取消状态不确定'),{cancelled:true})));
+      cancelTimer??=setTimeout(()=>reject(Object.assign(Error('回合取消未得到结束确认'),{cancelled:true})),cancelTimeoutMs);
+      const cancelling=native?control('invalidate'):this.cancel(sessionId);
+      cancelling.then(result=>{
+        if(native&&result.terminal){terminalObserved=true;reject(Object.assign(Error('回合已停止'),{cancelled:true,acknowledged:true}));}
+      }).catch(()=>reject(Object.assign(Error('回合取消状态不确定'),{cancelled:true})));
       if(continuous)complete();
     };
     signal.addEventListener('abort',abort,{once:true});
@@ -208,6 +238,10 @@ export class DshClient {
         if(event?.type==='turn/start'){currentTurn=data.turn;if(!turns.has(currentTurn))turns.set(currentTurn,{messages:[],ended:false});}
         if(event?.type==='user/message'){
           const message=data.message??data;
+          // Host projections use the user role too, but are not new inbox input.
+          // Trust the typed event source, never strings inside message content.
+          if(isHostContext(message,continuations.compactions))return;
+          if(continuous&&message.source?.kind==='plugin:qq-rsi-native'&&message.source.runId===runId&&message.source.continuation===true)return;
           const body=(message.content??[]).filter(x=>x.type==='text').map(x=>x.text).join('\n');
           const id=message.source?.rpcId??body.match(/\[QQ_INPUT:([a-f0-9-]+)\]/)?.[1];
           if(continuous&&continuations.owns(message)&&currentTurn!==undefined){
@@ -237,14 +271,36 @@ export class DshClient {
       await ready;if(options.signal?.aborted)throw Object.assign(Error('后台整理已让路'),{cancelled:true,acknowledged:true});submitted = true;run.accepting=true;
       await run.submit(text,'queue');
       return await finished;
+    } catch(error){failure=error;throw error;
     } finally {
+      closing=true;clearInterval(heartbeat);clearTimeout(cancelTimer);
       run.accepting=false;this.runs.delete(sessionId);signal.removeEventListener('abort',abort);lifetime.abort();
       if(continuous&&!succeeded)options.nativeTools.onCancel?.();
       clearTimeout(readyTimer);clearTimeout(turnTimer);this.sockets.delete(socket);socket.close();
-      if(callback){
+      if(callback&&!failure?.notSubmitted){
         await callback.close();
-        try{await this.rpc('qqRsiNative/release',{sessionId,runId});}
-        catch{this.systemLog?.record('native.release.failed',{component:'dsh',level:'warn'});}
+        let confirmed=false;
+        try{
+          let result=await control(terminalObserved||!submitted?'finish':'invalidate');
+          confirmed=result.released===true&&result.terminal===true;
+          const deadline=Date.now()+cancelTimeoutMs;
+          while(!confirmed&&submitted&&Date.now()<deadline){
+            await delay(Math.min(250,cancelTimeoutMs));result=await control('status');
+            if(result.terminal){result=await control('finish');confirmed=result.released===true&&result.terminal===true;}
+          }
+        }catch{this.systemLog?.record('native.release.failed',{component:'dsh',level:'warn'});}
+        // Closing the client during an explicit stop can beat turn/end on the
+        // event stream. Only the authenticated terminal receipt confirms exit.
+        if(confirmed&&failure&&abortRequested){failure.cancelled=true;failure.acknowledged=true;}
+        if(!confirmed&&submitted){
+          const error=failure??Error('DSH回合结束状态未确认，当前聊天暂停');
+          error.exitUnconfirmed={runId,token:callback.token};error.acknowledged=false;
+          if(!failure)throw error;
+        }
+      }else if(callback){await callback.close();}
+      else if(submitted&&!terminalObserved){
+        try{await this.cancel(sessionId);}catch{}
+        if(failure)failure.exitUnconfirmed={runId};
       }
     }
   }

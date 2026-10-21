@@ -1,7 +1,7 @@
 import path from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {readJson,writeJson} from './config.mjs';
-import {scopeOf} from './memory.mjs';
+import {personaIdentity} from './persona-cards.mjs';
 import {publicResultUrl} from '../../dsh-group-social/lib/search.mjs';
 
 // Adapted concepts from qq-bridge a56164e: candidate/confirmed/rejected slang
@@ -9,9 +9,9 @@ import {publicResultUrl} from '../../dsh-group-social/lib/search.mjs';
 // belongs to exactly one QQ chat. No remote text can confirm its own meaning.
 const clean=(v,n=300)=>String(v??'').replace(/[\x00-\x1f\u200b-\u200f]/g,' ').slice(0,n).trim();
 export class Knowledge {
-  constructor(runtime,key){
+  constructor(runtime,key,personaId){
     if(!/^\d{5,20}\/(?:private|group)\/\d{5,20}$/.test(key))throw Error('无效聊天');
-    this.key=key;this.file=path.join(runtime,'knowledge',scopeOf(key)+'.json');
+    this.key=key;this.file=path.join(runtime,'knowledge',personaIdentity(runtime,key,personaId).scope+'.json');
   }
   read(){const state=readJson(this.file,{key:this.key,revision:0,slang:[],stickers:[]});if(state.key!==this.key)throw Error('知识库范围不匹配');return state;}
   save(value){value.revision++;writeJson(this.file,value);return value;}

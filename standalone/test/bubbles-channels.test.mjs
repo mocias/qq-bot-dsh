@@ -57,6 +57,7 @@ test('reminder bypasses diving and bubble timer, remaining bubbles resume afterw
 test('stopping group during delay cancels unsent bubbles without stopping private chat',async t=>{
   let waiting;const ready=new Promise(r=>waiting=r);
   const {bridge,sent}=fixture(t,{wait:async(ms,signal)=>new Promise(resolve=>{signal.addEventListener('abort',resolve,{once:true});waiting();})});
+  bridge.startup.begin=()=>{}; // Channel restart only; startup sequence has its own integration test.
   bridge.dsh.prompt=async()=>[env('已经发送'),env('不能再发')];
   const task=bridge.handle(group,0);await ready;bridge.stop('group');await task;
   assert.equal(bridge.status.state,'running');assert.deepEqual(bridge.status.channels,{private:true,group:false});
@@ -84,6 +85,7 @@ test('independent startup validates only selected presets and reuses one OneBot 
   server.on('connection',socket=>{connections++;socket.on('message',bytes=>{const v=JSON.parse(bytes);socket.send(JSON.stringify({echo:v.echo,status:'ok',retcode:0,data:v.action==='get_login_info'?{user_id:config.botQQ}:{online:true,good:true}}));});});
   class Dsh{async probe(){return {presets:[{id:'test'}]};}close(){}}
   const bridge=new Bridge(temp(t),{Dsh});
+  bridge.startup.begin=()=>{}; // Keep this transport/preset fixture independent of model maintenance.
   t.after(async()=>{bridge.stop();for(const socket of server.clients)socket.terminate();await new Promise(r=>server.close(r));});
   const c={...config,groupPreset:'',qqUrl:'ws://127.0.0.1:'+server.address().port};
   await bridge.start(c,'private');assert.deepEqual(bridge.status.channels,{private:true,group:false});

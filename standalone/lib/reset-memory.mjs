@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {scopeOf} from './memory.mjs';
 import {readJson,writeJson} from './config.mjs';
+import {PersonaCards,personaScope} from './persona-cards.mjs';
 
 function location(runtime,relative){
   const root=path.resolve(runtime),target=path.resolve(root,relative);
@@ -28,10 +28,10 @@ export function recoverMemoryReset(runtime){
   fs.unlinkSync(journal);
 }
 export function resetMemories(runtime,bridge,keys){
-  if(bridge.status.state!=='stopped'||bridge.status.active||bridge.jobs.size||bridge.queues.size||bridge.maintenance.size)throw Error('请先停止 QQ 接收并等待全部任务结束');
+  if(bridge.status.state!=='stopped'||bridge.status.active||bridge.jobs.size||bridge.queues.size||bridge.maintenance.size||bridge.startup?.jobs.size)throw Error('请先停止 QQ 接收并等待全部任务结束');
   if(!keys.length||keys.some(key=>!/^\d{5,20}\/(?:private|group)\/\d{5,20}$/.test(key)))throw Error('请选择要重置的聊天');
   const id=randomUUID(),base='memory-reset-backups/'+id,selected=new Set(keys),before=structuredClone(bridge.state),moves=[];
-  for(const key of keys)for(const relative of ['memories/'+scopeOf(key),'knowledge/'+scopeOf(key)+'.json','chat-inbox/'+scopeOf(key)+'.json']){
+  for(const key of keys)for(const card of new PersonaCards(runtime).view(key).cards)for(const scope of [personaScope(key,card.id)])for(const relative of ['memories/'+scope,'knowledge/'+scope+'.json','chat-inbox/'+scope+'.json','chat-context/'+scope]){
     const source=location(runtime,relative);if(fs.existsSync(source))moves.push({source:relative,backup:base+'/'+relative});
   }
   for(const move of moves)location(runtime,move.backup);
@@ -41,7 +41,7 @@ export function resetMemories(runtime,bridge,keys){
   try{
     for(const move of moves){const target=location(runtime,move.backup);fs.mkdirSync(path.dirname(target),{recursive:true});fs.renameSync(location(runtime,move.source),target);}
     bridge.state.memoryEpochs??={};
-    for(const key of keys){bridge.state.memoryEpochs[key]=id;bridge.memories.delete(key);}
+    for(const key of keys){bridge.state.memoryEpochs[key]=id;bridge.memories.delete(key);bridge.chatWindows?.delete(key);delete bridge.state.startups?.[key];delete bridge.state.maintenanceInbox?.[key];}
     for(const [scope,session]of Object.entries(bridge.state.sessions))if(selected.has(session.route?.key))delete bridge.state.sessions[scope];
     // Old DSH sessions/workspaces remain on disk but must not rejoin reminders or
     // supply old context. A new epoch gives the next conversation a fresh workspace.

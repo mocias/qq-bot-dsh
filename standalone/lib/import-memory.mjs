@@ -41,7 +41,7 @@ export function importMemory({runtime,key,source,group=false}) {
   }
   writeJson(path.join(staging,'.runtime/import.json'),{key,source,at:new Date().toISOString(),inventory,snapshot:true});
   fs.renameSync(staging,target);
-  const store=new MemoryStore(runtime,key);
+  const store=new MemoryStore(runtime,key,'default');
   return {key,files:inventory.length,pages:store.pages().length,source,target};
 }
 export function importedStores(runtime){

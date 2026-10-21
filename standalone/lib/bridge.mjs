@@ -1,9 +1,15 @@
+import {promptText} from '../../native-dsh-plugin/lib/prompt-text.mjs';
 import fs from 'node:fs';
+import {PersonaCards,personaIdentity,DEFAULT_PERSONA} from './persona-cards.mjs';
+import {PromptProfiles} from './prompt-profiles.mjs';
+import {AbsenceClock,closingAbsence} from './absence.mjs';
+import {ChatHandoff} from './handoff.mjs';
+import {wakePaths,readWakeJson,writeWakeJson} from '../../native-dsh-plugin/lib/scheduled-wake.mjs';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import WebSocket from 'ws';
 import { DshClient,presetIds } from './dsh.mjs';
-import { readJson, writeJson } from './config.mjs';
+import { readJson, writeJson, defaults } from './config.mjs';
 import { MemoryStore, decodeReply, preparePrompt, automaticMemoryRules } from './memory.mjs';
 import {workspaceFor,beijingDate} from './workspace.mjs';
 import { initializeLife, noteArrival, observeCompaction, maintain, due } from './lifecycle.mjs';
@@ -23,9 +29,13 @@ import {ChatInbox,Participation} from './chat-inbox.mjs';
 import {MessageTools,MESSAGE_GUIDE} from './message-tools.mjs';
 import {nativePrompt,nativeTurn} from './native-turn.mjs';
 import {DELEGATION_POLICY_VERSION} from './delegation-policy.mjs';
+import {WorldSimulationClock} from './world-simulation.mjs';
+import {RoleState} from './role-state.mjs';
 import {ConversationInbox,CONTINUOUS_POLICY_VERSION} from './continuous-chat.mjs';
 import {isSilentReply,planDescription} from './reply-control.mjs';
 import {identity,snapshotOf,routeSnapshots,inboxSnapshot,messageView,evidenceMessages,IDENTITY_RULES,ATTRIBUTION_RULES} from './message-snapshot.mjs';
+import {StartupChats} from './startup-chat.mjs';
+import {ChatWindow,CHAT_WINDOW_VERSION} from './chat-window.mjs';
 
 const pause=(ms,signal)=>new Promise(resolve=>{
   if(signal.aborted)return resolve();
@@ -68,7 +78,12 @@ export class Bridge {
     this.queues = new Map(); this.pending = new Map(); this.generation = 0;
     this.epochs=new Map();this.ambient=new Map();this.state.ambientAttempts??={};this.ambientAttempts=this.state.ambientAttempts;this.management=new Management(runtime);
     this.now=now;this.jobs=new Map();this.maintenance=new Map();this.memories=new Map();
+    this.deferredDrains=new Map();this.state.maintenanceInbox??={};
+    // A crash after dispatch has an unknown outcome: retain it, never auto-replay.
+    for(const rows of Object.values(this.state.maintenanceInbox))for(const row of rows)if(row.state==='running')row.state='uncertain';
     this.state.retired??=[];this.state.rotations??={};
+    this.startup=new StartupChats(this);
+    this.chatWindows=new Map();
     this.state.sessionNaming??={counters:{},names:{}};
     this.state.groupSendTimes??={};this.state.reminders??=[];
     this.reminders=new ReminderRelay({reserve:(id,session)=>{const token=(session.backend??this.config.dshUrl)+'/'+id;if(this.state.reminders.includes(token))return false;this.state.reminders.push(token);this.state.reminders=this.state.reminders.slice(-10000);this.persist();return true;},deliver:(session,text,id)=>this.deliverReminder(session,text,id),onError:error=>{this.reportError(error.message);}});
@@ -78,30 +93,210 @@ export class Bridge {
       if(!session.route)continue;
       const life=initializeLife(session,now());
       if(life.pending){
-        const store=this.memory(session.route.key);
+        const store=this.memory(session.route.key,session.personaId??DEFAULT_PERSONA);
         if(store.hasReceipt(life.pending.id)){
           life.digestedIds=[...new Set([...life.digestedIds,...(life.pending.compactionIds??[])])];
           life.hadConversation=!!(life.hadConversation||life.conversation.length);
-          life.receipt=life.pending.id;life.digestVersion=life.pending.version;life.conversation=[];
+          life.receipt=life.pending.id;life.digestVersion=life.pending.version;
+          life.conversation=life.pending.conversationIds?life.conversation.filter(c=>!life.pending.conversationIds.includes(c.id)):[];
         }else session.blocked=true;
         life.pending=null;this.persist();
       }
     }
+    this.syncWakeRoutes();
+  }
+  roleState(session){const config=this.configFor(session.route);return config.memoryEnabled?new RoleState(this.memory(session.route.key),session,{now:this.now,persist:()=>this.persist(),config}):null;}
+  simulationClock(session){return new WorldSimulationClock(session,{now:this.now,persist:()=>this.persist(),roleState:this.roleState(session),config:this.configFor(session.route)});}
+  closing(key){return closingAbsence(Object.entries(this.state.sessions).find(([scope,s])=>s.route?.key===key&&this.scope(s.route)===scope)?.[1]);}
+  async finishAbsence(session,signal,generation){
+    if(session.absence?.phase!=='digest')return;
+    const config=this.configFor(session.route),store=this.memory(session.route.key,session.personaId);
+    const current=()=>this.enabled(session.route)&&generation===this.generation&&!signal.aborted;
+    if(!current())return;
+    const pending=session.absence;
+    if(config.memoryEnabled){
+      const handoff=new ChatHandoff({store,session,route:session.route,config});
+      const record=handoff.load(pending.handoffId),known=new Set(session.life.conversation.flatMap(c=>c.inputs.map(m=>m.sourceId??m.messageId)));
+      const missing=record.dialogue.filter(m=>!known.has(m.sourceId??m.messageId));
+      if(missing.length)session.life.conversation.push({id:'absence-recovery-'+record.id,inputs:missing,reply:'',at:this.now()});
+      pending.digestId??='absence-digest-'+randomUUID();this.persist();
+      if(!store.hasReceipt(pending.digestId))await maintain({session,config,store,dsh:this.maintenanceDsh(session),persist:()=>this.persist(),now:this.now,isCurrent:current,signal,
+        startupSnapshot:{compactions:session.life.compactions.filter(c=>!session.life.digestedIds.includes(c.id)),conversation:[...session.life.conversation]},digestId:pending.digestId,maintenanceReason:'user-away'});
+      if(!store.hasReceipt(pending.digestId))throw Error('离开整理尚未取得记忆保存回执，保留待办');
+    }
+    if(!current())return;
+    session.absence={...pending,phase:'asleep',sleptAt:this.now(),memorySaved:!!config.memoryEnabled};session.blocked=false;this.persist();
   }
   inbox(key){return new ChatInbox(this.runtime,key,this.now);}
-  enabled(route){return this.status.state==='running'&&this.status.channels?.[route.group?'group':'private']!==false;}
+  chatWindow(key){const {personaId}=personaIdentity(this.runtime,key);if(this.chatWindows.get(key)?.personaId!==personaId)this.chatWindows.set(key,new ChatWindow(this.runtime,key,personaId));return this.chatWindows.get(key);}
+  maintenanceDsh(session){
+    return {prompt:async(id,text,options)=>{
+      if(id!==session.id)throw Error('记忆整合必须使用当前聊天会话');
+      if(options.signal?.aborted||!this.enabled(session.route))throw Object.assign(Error('整理已停止'),{cancelled:true,acknowledged:true});
+      // Startup and idle maintenance already own this chat's serial queue.
+      // Tool scopes change between phases; the conversation identity does not.
+      try{return await this.dsh.prompt(session.id,text,options);}
+      catch(error){
+        if(error.exitUnconfirmed)error.exitUnconfirmed={...error.exitUnconfirmed,sessionId:session.id};
+        throw error;
+      }
+    }};
+  }
+  async prepareChatWindow(route,session,isCurrent=()=>true){
+    const window=this.chatWindow(route.key);window.sync(this.inbox(route.key).read().messages);
+    // Persist the bounded projection independently of DSH session lifetime.
+    // Only the existing receipt/compaction/idle lifecycle may auto-rotate DSH.
+    if(!isCurrent())throw Error('聊天已停止');
+    window.slide(route.inboxSeq??Infinity);
+    if(session.windowVersion!==CHAT_WINDOW_VERSION)Object.assign(session,{windowVersion:CHAT_WINDOW_VERSION,windowTurns:0,windowChars:0,windowMessages:0,windowInitial:true});
+    this.persist();return session;
+  }
+  enabled(route){return this.status.state==='running'&&this.status.channels?.[route.group?'group':'private']!==false&&(!route.personaId||route.personaId===personaIdentity(this.runtime,route.key).personaId);}
   participation(key){return new Participation(this.inbox(key));}
-  memory(key){if(!this.memories.has(key))this.memories.set(key,new MemoryStore(this.runtime,key));return this.memories.get(key);}
-  configFor(route){const config=this.voiceProfiles.resolve(resolveChatConfig(this.config,route),route.key);return {...config,memoryContextActive:!config.memoryActiveOnly||this.state.lastActiveKey===route.key};}
-  scope(route){const config=this.configFor(route),preset=route.group?config.groupPreset:config.privatePreset;return createHash('sha256').update(config.dshUrl+'|'+preset+'|'+route.key+(this.state.memoryEpochs?.[route.key]?'|'+this.state.memoryEpochs[route.key]:'')).digest('hex');}
+  memory(key,requestedId){const {personaId}=personaIdentity(this.runtime,key,requestedId);if(this.memories.get(key)?.personaId!==personaId)this.memories.set(key,new MemoryStore(this.runtime,key,personaId));return this.memories.get(key);}
+  configFor(route){const config=this.voiceProfiles.resolve(resolveChatConfig(this.config,route),route.key);return {...config,...new PromptProfiles(this.runtime).resolve(route.key,route.personaId),memoryContextActive:!config.memoryActiveOnly||this.state.lastActiveKey===route.key};}
+  scope(route){const config=this.configFor(route),preset=route.group?config.groupPreset:config.privatePreset,{personaId}=personaIdentity(this.runtime,route.key);return createHash('sha256').update(config.dshUrl+'|'+preset+'|'+route.key+(this.state.memoryEpochs?.[route.key]?'|'+this.state.memoryEpochs[route.key]:'')+(personaId===DEFAULT_PERSONA?'':'|persona:'+personaId)).digest('hex');}
+  activePersonaSession(session){return !!session.route&&(session.personaId??DEFAULT_PERSONA)===personaIdentity(this.runtime,session.route.key).personaId;}
+  configurePersona(input){
+    const {key,personaId}=input,cards=new PersonaCards(this.runtime);cards.get(key,personaId);
+    const kind=key.split('/')[1];
+    if(this.status.state==='connecting'||this.status.state==='running'&&this.status.channels?.[kind]!==false)throw Error('请先停止'+(kind==='group'?'群聊':'私聊')+'接收，待任务结束后点击确定配置');
+    if(this.jobs.has(key)||this.queues.has(key)||this.maintenance.has(key)||this.startup.jobs.has(key)||this.backgrounds.has(key)||this.outbox.has(key)||this.deferredDrains.has(key)||this.awaitingExit(key))throw Error('此聊天的旧任务尚未结束确认，请稍后重试；人格未切换');
+    const view=cards.view(key);
+    if(input.revision!==view.revision)throw Error('人格配置已变化，请刷新后重试');
+    if(view.activeId===personaId)return view;
+    // Clear only transient routing state before the atomic active-card commit.
+    // All persona stores and DSH sessions remain recoverable under their own scope.
+    this.archiveStartupBacklog({key});
+    delete this.state.startups[key];this.persist();
+    const result=cards.assign(input);
+    this.epochs.set(key,(this.epochs.get(key)??0)+1);
+    this.memories.delete(key);this.chatWindows.delete(key);
+    this.syncReminders();return result;
+  }
   reportError(message){this.status.lastError=message;this.systemLog?.record('bridge.error',{component:'qq',level:'error'});}
   flow(event,route,extra={}){this.systemLog?.record(event,{component:'flow',chat:route?.key,...extra});}
+  async confirmSessionExit(session){
+    if(!session?.blocked&&!session?.exitUnconfirmed)return;
+    if(!session.exitUnconfirmed&&!this.dsh.confirmExit)return;
+    let ended=false;
+    try{ended=await this.dsh.confirmExit?.(session.exitUnconfirmed?.sessionId??session.id,session.exitUnconfirmed??{});}catch{}
+    if(!ended)throw Error('旧DSH回合结束状态未确认，当前聊天暂停；消息仍保留');
+    delete session.exitUnconfirmed;this.persist();
+  }
+  async ensureStartupSession(route,isCurrent=()=>true){
+    route={...route,personaId:personaIdentity(this.runtime,route.key).personaId};
+    const check=()=>{if(!isCurrent())throw Error('启动已停止');};check();
+    const config=this.configFor(route),scope=this.scope(route),preset=route.group?config.groupPreset:config.privatePreset;
+    let session=this.state.sessions[scope];
+    await this.confirmSessionExit(session);check();
+    const transport=config.dshNativeTools?'native-v1':'legacy';
+    if(!session||session.blocked||(session.transport??'legacy')!==transport){
+      const dir=session?.workspace??workspaceFor(this.runtime,this.state,route,scope,this.now(),()=>this.persist());
+      const id=await this.dsh.createSession(dir,preset);
+      check();
+      if(session)this.state.retired.push({...session,reason:'startup-recovery',retiredAt:this.now()});
+      session={id,route,personaId:route.personaId,transport,workspace:dir,preset,backend:this.config.dshUrl,blocked:false,namingPending:true,
+        permissionPending:!!config.permissionPreset,permissionPreset:config.permissionPreset??''};
+      initializeLife(session,this.now());this.state.sessions[scope]=session;this.persist();
+    }
+    if(session.permissionPending){check();await this.dsh.applyPermission(session.id,session.permissionPreset);check();delete session.permissionPending;this.persist();}
+    if(session.namingPending){check();const name=await this.nameSession(route,session.id);check();Object.assign(session,name);delete session.namingPending;this.persist();}
+    return session;
+  }
+  archiveStartupBacklog(route){
+    // Preserve every record; only change whether old pending work may reply.
+    for(const row of this.state.maintenanceInbox[route.key]??[]){
+      if(['pending','cancelled','filtered'].includes(row.state))row.state='history';
+    }
+    this.persist();
+  }
+  deferForMaintenance(route){
+    const rows=this.state.maintenanceInbox[route.key]??=[];
+    if(!rows.some(row=>row.route.messageId===route.messageId))rows.push({route:structuredClone(route),backend:this.config.dshUrl,state:'pending'});
+    this.persist();this.flow('input.maintenance_queued',route,{count:rows.filter(row=>row.state==='pending').length});
+    this.jobs.get(route.key)?.queueDeferred?.();
+  }
+  hasDeferred(key){return this.state.maintenanceInbox[key]?.some(row=>['pending','running','uncertain'].includes(row.state));}
+  awaitingExit(key){return Object.values(this.state.sessions).some(s=>s.route?.key===key&&s.exitUnconfirmed);}
+  resumeDeferred(key){
+    if(this.awaitingExit(key)||this.state.maintenanceInbox[key]?.some(row=>['running','uncertain'].includes(row.state)))throw Error('存在执行结果未确认的消息，未自动重试');
+    for(const row of this.state.maintenanceInbox[key]??[])if(row.state==='pending')delete row.rejected;
+    this.persist();return this.drainDeferred(key);
+  }
+  cancelDeferred(matches){
+    for(const [key,rows] of Object.entries(this.state.maintenanceInbox))if(matches(key))for(const row of rows)if(['pending','uncertain'].includes(row.state))row.state='cancelled';
+    this.persist();
+  }
+  drainDeferred(key,generation=this.generation){
+    if(this.closing(key))return;
+    if(this.startup.blocked(key))return;
+    if(this.awaitingExit(key))return;
+    if(this.state.maintenanceInbox[key]?.some(row=>row.state==='pending'&&row.rejected))return;
+    if(!this.hasDeferred(key)||this.state.maintenanceInbox[key]?.some(row=>row.state==='uncertain'))return;
+    if(this.maintenance.has(key)||this.deferredDrains.has(key))return this.deferredDrains.get(key);
+    const operation=Promise.resolve().then(async()=>{
+      const rows=this.state.maintenanceInbox[key]??[];
+      while(generation===this.generation&&!this.maintenance.has(key)&&!this.startup.blocked(key)){
+        let row=rows.find(item=>item.state==='pending');if(!row)return;
+        const policy=this.configFor(row.route);
+        // Direct mentions/replies can pass waiting ambient items, never a running turn.
+        if(row.route.ambient&&this.now()-(this.ambientAttempts[key]??0)<policy.groupAmbientMinSeconds*1000){
+          row=rows.find(item=>item.state==='pending'&&!item.route.ambient);if(!row)return;
+        }
+        const route={...row.route,epoch:this.epochs.get(key)??0};
+        if(!this.enabled(route)||this.status.active>=20)return;
+        if(row.backend!==this.config.dshUrl||key.split('/')[0]!==this.config.botQQ||!(route.group?this.config.groups:this.config.privateUsers).includes(route.id))return;
+        const config=this.configFor(route);
+        if(route.needsReplyCheck){
+          let fromBot=false;
+          try{fromBot=(await this.media.reference(route,route.replyId)).fromBot;}
+          catch(error){
+            // Quoted content is optional. Do not retry a missing quote forever.
+            route.referenceUnavailable=true;
+            route.referenceError=error.message;
+            fromBot=(route.knownReplyIds??[]).includes(String(route.replyId));
+            this.flow('input.reference_unavailable',route);
+          }
+          if(generation!==this.generation||!this.enabled(route)||row.state!=='pending')return;
+          route.needsReplyCheck=false;route.ambient=!fromBot;
+          Object.assign(row.route,{needsReplyCheck:false,ambient:route.ambient,
+            referenceUnavailable:route.referenceUnavailable,referenceError:route.referenceError});this.persist();
+        }
+        if(generation!==this.generation||!this.enabled(route)||row.state!=='pending'||this.status.active>=20)return;
+        if(route.ambient&&!config.groupAmbientEnabled||!this.participation(key).onInput(route,config)){
+          row.state='filtered';this.persist();continue;
+        }
+        // Keep the normal ambient cooldown without dropping the saved messages.
+        if(route.ambient&&this.now()-(this.ambientAttempts[key]??0)<config.groupAmbientMinSeconds*1000)continue;
+        if(route.ambient)this.ambientAttempts[key]=this.now();
+        row.state='running';this.persist();
+        try{
+          await this.dispatch(route,generation,true);
+          rows.splice(rows.indexOf(row),1);this.persist();
+        }catch(error){row.state=error.notSubmitted?'pending':'uncertain';if(error.notSubmitted)row.rejected=error.message;this.persist();this.reportError(error.message);return;}
+      }
+    }).catch(error=>this.reportError(error.message)).finally(()=>this.deferredDrains.delete(key));
+    this.deferredDrains.set(key,operation);return operation;
+  }
   messageInput(route,session,job){
+    const startup=this.state.startups[route.key];
+    const historyThroughSeq=startup?.historyThroughSeq??0;
+    route={...route,replyPolicy:{startedAt:startup?.at??null,historyThroughSeq}};
+    if(session.windowVersion===CHAT_WINDOW_VERSION&&!route.trigger){
+      const window=this.chatWindow(route.key);window.sync(this.inbox(route.key).read().messages);
+      const before=route.inboxSeq??Infinity,initial=session.windowInitial&&!job;
+      const ids=new Set(window.recent(before,initial?historyThroughSeq:Math.max(historyThroughSeq,session.windowThroughSeq??0)).map(m=>m.id));
+      const context=window.data.rows.filter(row=>ids.has(window.data.messages[row.snapshot.sourceId]?.alias)).map(row=>row.snapshot);
+      // Background grants evidence, not reply-queue ownership or read acknowledgement.
+      return {...route,contextMessages:context,evidenceIds:[...(route.evidenceIds??[]),...context.map(m=>m.sourceId)]};
+    }
     if(!route.group||route.trigger||!Number.isSafeInteger(route.inboxSeq))return route;
     const floor=Math.max(session.contextThroughSeq??0,job?.contextThroughSeq??0);
     const current=new Set(route.inboxSeqs??[route.inboxSeq]);
     const state=this.inbox(route.key).read();
-    const rows=state.messages.filter(m=>!m.outgoing&&!m.read&&m.seq>state.readThrough&&m.seq>floor&&m.seq<route.inboxSeq&&!current.has(m.seq));
+    const waiting=new Set((this.state.maintenanceInbox[route.key]??[]).filter(r=>['pending','running','uncertain'].includes(r.state)).map(r=>r.route.messageId));
+    const rows=state.messages.filter(m=>!m.outgoing&&!m.read&&m.seq>state.readThrough&&m.seq>historyThroughSeq&&m.seq>floor&&m.seq<route.inboxSeq&&!current.has(m.seq)&&!waiting.has(m.sourceId));
     const context=[];let size=0;
     for(const m of rows.slice(-20).reverse()){
       const item=inboxSnapshot(m);
@@ -146,9 +341,10 @@ export class Bridge {
     for(const message of route.messages??[]){message.snapshot??=snapshotOf(message);mark(message.snapshot);}for(const message of context)mark(message);
     return route;
   }
-  summary(){return Object.values(this.state.sessions).filter(s=>s.route).map(s=>({key:s.route.key,sessionId:s.id,title:s.title,workspace:s.workspace,permissionPreset:s.permissionPreset??'',blocked:s.blocked,
+  summary(config=this.config??defaults){return Object.values(this.state.sessions).filter(s=>s.route).map(s=>({key:s.route.key,personaId:s.personaId??DEFAULT_PERSONA,activePersona:this.activePersonaSession(s),sessionId:s.id,title:s.title,workspace:s.workspace,permissionPreset:s.permissionPreset??'',blocked:s.blocked,
     compactions:s.life?.compactions.length??0,pendingCompactions:s.life?.compactions.filter(c=>!s.life.digestedIds.includes(c.id)).length??0,
-    lastDigest:this.memory(s.route.key).state.lastDigest||null,maintenance:this.maintenance.has(s.route.key),lastActivity:s.life?.lastAt}));}
+    lastDigest:this.memory(s.route.key,s.personaId??DEFAULT_PERSONA).state.lastDigest||null,maintenance:this.maintenance.has(s.route.key)&&this.activePersonaSession(s),lastActivity:s.life?.lastAt,
+    absence:{phase:s.absence?.phase??'active',seconds:Math.max(0,Math.floor((this.now()-(s.lastHumanMessageAt??s.lastUserAt??this.now()))/1000)),thresholdSeconds:resolveChatConfig(config,s.route).userAwaySeconds??1800}}));}
   persist() { this.state.seen = this.state.seen.slice(-10000); this.state.deliveries = this.state.deliveries.slice(-200); writeJson(this.file, this.state); }
   async nameSession(route,id){
     const naming=this.state.sessionNaming,token=createHash('sha256').update(this.config.dshUrl+'|'+route.key+'|'+id).digest('hex');
@@ -167,7 +363,7 @@ export class Bridge {
     await this.dsh.rename(id,entry.title);
     return {...entry};
   }
-  async start(config,kind='all') {
+  async start(config,kind='all',options={}) {
     const selected=kinds(kind);
     this.systemLog?.record('bridge.start.requested',{component:'qq'});
     if(this.status.state==='connecting')throw Error('正在连接，请稍后');
@@ -187,10 +383,12 @@ export class Bridge {
     if(this.status.state==='running'){
       const generation=this.generation,revision=this.channelRevision??0;checkPresets(await this.dsh.probe());
       if(this.status.state!=='running'||generation!==this.generation||revision!==(this.channelRevision??0))throw Error('启动已取消');
+      const newlyEnabled=selected.filter(k=>!this.status.channels[k]);
+      for(const jobs of [this.startup.jobs,this.maintenance,this.jobs,this.queues,this.outbox])if([...jobs.keys()].some(key=>newlyEnabled.includes(key.split('/')[1])))throw Error('该类型上一轮任务正在退出，请稍后启动');
       for(const k of selected)this.status.channels[k]=true;
-      this.status.lastError='';this.syncReminders();return;
+      this.status.lastError='';this.startup.begin(newlyEnabled,options);this.syncReminders();return;
     }
-    if(this.jobs.size||this.queues.size||this.maintenance.size||this.outbox.size)throw Error('上一轮任务正在退出，请稍后启动');
+    if(this.jobs.size||this.queues.size||this.maintenance.size||this.startup.jobs.size||this.outbox.size)throw Error('上一轮任务正在退出，请稍后启动');
     this.config = structuredClone(config); this.dsh = new this.Dsh(config);
     this.dsh.systemLog=this.systemLog;
     const generation = ++this.generation; this.status = { state: 'connecting', active: this.status.active, lastError: '',channels:{private:selected.includes('private'),group:selected.includes('group')} };
@@ -213,12 +411,14 @@ export class Bridge {
       const verified=await verifyQQ(socket,config);
       if(generation!==this.generation)throw Error('启动已取消');
       Object.assign(this.status,verified);
-      this.status.state = 'running';this.syncReminders();
+      this.status.state = 'running';this.startup.begin(selected,options);this.syncReminders();
       this.systemLog?.record('bridge.connected',{component:'qq'});
       this.timer=setInterval(()=>this.tick().catch(error=>{this.reportError(error.message);}),1000);this.timer.unref?.();
     } catch (error) { if (this.generation === generation) { this.stop(); this.reportError(error.message); } throw error; }
   }
   stop(kind='all') {
+    this.startup.stop(key=>kinds(kind).includes(key.split('/')[1]));
+    this.cancelDeferred(key=>kinds(kind).includes(key.split('/')[1]));
     const selected=kinds(kind);
     this.channelRevision=(this.channelRevision??0)+1;
     if(kind!=='all'&&this.status.state==='connecting')throw Error('正在连接，请先停止全部');
@@ -244,6 +444,7 @@ export class Bridge {
     this.generation++; this.socket?.close(); this.dsh?.close();
     for (const resolve of this.pending.values()) resolve(null);
     this.pending.clear(); this.status.state='stopped';this.status.channels={private:false,group:false};
+    this.syncWakeRoutes();
   }
   receive(event, generation) {
     if (generation !== this.generation || this.status.state !== 'running') return;
@@ -263,13 +464,18 @@ export class Bridge {
         _poke:true,message:[...(group?[{type:'at',data:{qq:bot}}]:[]),{type:'text',data:{text:'[对方拍了拍你]'}}]};
     }
     const route = routeMessage(event, this.config,true); if (!route || !this.enabled(route)||this.state.seen.includes(route.messageId)) return;
+    route.personaId=personaIdentity(this.runtime,route.key).personaId;
+    route.humanObservedAt=this.now();
+    const observedSession=this.state.sessions[this.scope(route)];
+    if(observedSession){observedSession.lastHumanMessageAt=this.now();this.persist();}
     this.status.lastObservedAt=new Date(this.now()).toISOString();
     this.flow('input.observed',route);
     if(event._poke){route.qqMessageId=null;route.poke=true;}
     const effective=this.configFor(route);
-    if(route.group||effective.messageToolsEnabled){
+    if(route.group||effective.messageToolsEnabled||effective.dshNativeTools){
       const item=this.inbox(route.key).append({messageId:route.qqMessageId,sourceId:route.messageId,sender:route.sender,text:route.requestText??route.text,replyTo:route.replyId,snapshot:snapshotOf(route),segments:route.segments,kind:route.poke?'poke':'message'});
       route.inboxSeq=item.seq;
+      if(effective.dshNativeTools)this.chatWindow(route.key).sync([item]);
     }
     if(effective.memoryEnabled)this.memory(route.key).record({id:route.messageId,kind:'qq-input',snapshot:snapshotOf(route),segments:route.segments});
     if(route.ambient&&!effective.groupAmbientEnabled){this.flow('input.mention_required',route);this.state.seen.push(route.messageId);this.persist();return;}
@@ -279,57 +485,75 @@ export class Bridge {
     this.epochs.set(route.key,route.epoch);
     route.knownReplyIds=[...this.state.deliveries.filter(d=>d.key===route.key&&d.state==='sent').map(d=>d.qqMessageId),
       ...this.inbox(route.key).read().messages.filter(m=>m.outgoing&&m.messageId).map(m=>m.messageId)];
+    const explicitStop=!route.ambient&&/^\/stop\s*$/i.test(route.text)&&effective.adminUsers?.includes(route.sender);
+    if(!explicitStop&&(this.closing(route.key)||this.awaitingExit(route.key)||this.startup.blocked(route.key)||this.maintenance.has(route.key)||this.deferredDrains.has(route.key)||this.hasDeferred(route.key))){
+      this.deferForMaintenance(route);this.state.seen.push(route.messageId);this.persist();return;
+    }
     if(route.needsReplyCheck){
       this.state.seen.push(route.messageId);this.persist();
-      this.media.reference(route,route.replyId).then(result=>{if(generation!==this.generation)return;if(result.fromBot){route.needsReplyCheck=false;this.dispatch(route,generation);}else if(this.configFor(route).groupAmbientEnabled){route.needsReplyCheck=false;route.ambient=true;this.dispatch(route,generation);}}).catch(error=>{this.reportError(error.message);});return;
+      this.deferForMaintenance(route);this.drainDeferred(route.key,generation);return;
     }
     this.state.seen.push(route.messageId);this.persist();this.dispatch(route,generation);
   }
-  dispatch(route,generation){
+  dispatch(route,generation,deferred=false){
     if(!this.enabled(route)||generation!==this.generation||route.epoch!==(this.epochs.get(route.key)??0))return;
     if(!this.participation(route.key).onInput(route,this.configFor(route)))return;
     const command=route.text.match(/^\/([a-z]+)(?:\s+([\s\S]*))?$/i);
-    if(command&&!route.ambient){if(this.status.active>=20&&command[1].toLowerCase()!=='stop')return;this.status.active++;this.command(route,command,generation).catch(error=>{this.reportError(error.message);}).finally(()=>{this.status.active=Math.max(0,this.status.active-1);});return;}
-    if(route.ambient&&!this.jobs.get(route.key)?.continuous){this.backgrounds.get(route.key)?.abort();this.maintenance.get(route.key)?.controller.abort();this.bufferAmbient(route,generation);return;}
+    if(!deferred&&!(!route.ambient&&command?.[1].toLowerCase()==='stop'&&this.configFor(route).adminUsers?.includes(route.sender))&&(this.awaitingExit(route.key)||this.startup.blocked(route.key)||this.maintenance.has(route.key)||this.deferredDrains.has(route.key)||this.hasDeferred(route.key))){this.deferForMaintenance(route);return;}
+    if(command&&!route.ambient){if(this.status.active>=20&&command[1].toLowerCase()!=='stop')return;this.status.active++;return this.command(route,command,generation).catch(error=>{this.reportError(error.message);}).finally(()=>{this.status.active=Math.max(0,this.status.active-1);});}
+    if(!deferred&&route.ambient&&!this.jobs.get(route.key)?.continuous){this.backgrounds.get(route.key)?.abort();this.bufferAmbient(route,generation);return;}
     const buffered=this.ambient.get(route.key);if(buffered){clearTimeout(buffered.timer);this.ambient.delete(route.key);}
-    this.accept(route,generation);
+    return this.accept(route,generation);
   }
   accept(route,generation){
     if(!this.enabled(route))return;
+    if(this.closing(route.key)){this.deferForMaintenance(route);return;}
     const config=this.configFor(route);
     this.status.lastReceivedAt=new Date().toISOString();this.status.lastReceivedId=route.messageId;
     if (this.status.active >= 20) { this.reportError('待处理消息已满，本条消息未处理'); return; }
-    const session=this.state.sessions[this.scope(route)];if(session){noteArrival(session,this.now());session.lastUserAt=this.now();}
+    const session=this.state.sessions[this.scope(route)];if(session){noteArrival(session,this.now());session.lastUserAt=this.now();session.lastHumanMessageAt=Math.max(session.lastHumanMessageAt??0,route.humanObservedAt??this.now());delete session.worldSimulationPaused;}
     this.state.lastActiveKey=route.key;
     this.backgrounds.get(route.key)?.abort();
-    this.maintenance.get(route.key)?.controller.abort();
     if(config.memoryEnabled)for(const input of route.messages??[route])this.memory(route.key).record({id:input.messageId,kind:'qq-input',snapshot:snapshotOf(input),segments:input.segments});
     this.persist(); this.status.active++;
     const job=this.jobs.get(route.key),policy=route.group?config.groupMessagePolicy:config.privateMessagePolicy;
     if(job?.continuous&&!job.controller.signal.aborted){
-      const operation=this.dsh.awaitingChild?.(job.session.id)
+      const operation=this.dsh.awaitingChild?.(job.session.id)&&job.canTake?.()
         ?this.insert(route,job,generation)
-        :Promise.resolve(job.conversationInbox.push(route)||this.reportError('持续对话的待处理消息已满'));
+        :Promise.resolve(job.conversationInbox.push(route)||this.deferForMaintenance(route));
       operation.catch(error=>this.reportError(error.message)).finally(()=>{this.status.active=Math.max(0,this.status.active-1);});
-      return;
+      return operation;
     }
     if(job?.sending&&!route.ambient)job.controller.abort();
     const operation=job&&!job.sending&&!job.background&&!job.toolsActive&&!route.ambient&&!route.hasMedia&&policy==='steer'&&this.dsh.canSteer?.(job.session.id)
       ? this.insert(route,job,generation):this.enqueue(route,generation);
     operation.catch(error=>{this.reportError(error.message);}).finally(()=>{this.status.active=Math.max(0,this.status.active-1);});
+    return operation;
   }
   async insert(route,job,generation){
+    if(job.continuous&&!job.canTake?.()){this.deferForMaintenance(route);return;}
     const config=this.configFor(route);
-    route=await this.prepareMessages(route,config);
-    route=this.messageInput(route,job.session,job);
-    route=await this.prepareContext(route,config);
+    const deferred=!!route.fromDeferred;
+    if(deferred){route=await job.prepareIncoming(route);if(!route)return;}
+    else{
+      route=await this.prepareMessages(route,config);
+      route=this.messageInput(route,job.session,job);
+      route=await this.prepareContext(route,config);
+      if(job.window)route=job.window.attach(route,{...job.session,windowThroughSeq:job.contextThroughSeq});
+    }
     if(!this.enabled(route)||generation!==this.generation||route.epoch!==undefined&&route.epoch!==(this.epochs.get(route.key)??0))return;
     if(route.images?.length&&!job.continuous)return this.enqueue(route,generation);
-    job.inputs.push(route);
+    if(!deferred)job.inputs.push(route);
     job.onIncoming?.(route);
     try{
-      const accepted=await this.dsh.steer(job.session.id,preparePrompt(this.memory(route.key),route,config,route.evidenceIds??[],{bootstrap:false}),route.images);
-      if(!accepted){job.inputs=job.inputs.filter(x=>x!==route);return this.enqueue(route,generation);}
+      const prompt=job.window?nativePrompt(this.memory(route.key),route,config,{bootstrap:false}):preparePrompt(this.memory(route.key),route,config,route.evidenceIds??[],{bootstrap:false});
+      const accepted=await this.dsh.steer(job.session.id,prompt,route.images);
+      if(accepted&&job.continuous)this.simulationClock(job.session).delivered();
+      if(!accepted){
+        job.inputs=job.inputs.filter(x=>x!==route);
+        if(deferred){for(const row of job.deferredConsumed)if(row.route.messageId===route.messageId){row.state='pending';job.deferredConsumed.delete(row);}job.deferredQueued.delete(route.messageId);this.persist();return;}
+        return this.enqueue(route,generation);
+      }
       job.contextThroughSeq=Math.max(job.contextThroughSeq??0,route.inboxSeq??0);
     }catch(error){job.session.blocked=true;this.persist();throw error;}
   }
@@ -346,19 +570,21 @@ export class Bridge {
     this.queues.set(route.key, task);return task;
   }
   async handle(route, generation) {
+    route={...route,personaId:route.personaId??personaIdentity(this.runtime,route.key).personaId};
     const config=this.configFor(route);
     if (!this.enabled(route)||generation !== this.generation||route.epoch!==undefined&&route.epoch!==(this.epochs.get(route.key)??0)) return;
     if(route.trigger&&route.signal?.aborted)return;
     const preset = route.group ? config.groupPreset : config.privatePreset;
     const scope = this.scope(route);
     let session = this.state.sessions[scope];
+    if(session?.blocked||session?.exitUnconfirmed){await this.confirmSessionExit(session);if(session.absence)session.blocked=false;}
     const dsh = this.dsh;
     const transport=config.dshNativeTools?'native-v1':'legacy';
     const transportChanged=session&&(session.transport??'legacy')!==transport;
     if (!session || session.blocked || transportChanged) {
       const dir = transportChanged&&session.workspace?session.workspace:workspaceFor(this.runtime,this.state,route,scope,this.now(),()=>this.persist());
       if(session)this.state.retired.push({...session,reason:transportChanged?'transport-upgrade':'interrupted',retiredAt:this.now()});
-      session = { id: await dsh.createSession(dir, preset), transport,namingPending:true,permissionPending:!!config.permissionPreset,permissionPreset:config.permissionPreset??'',blocked: false,route:{key:route.key,id:route.id,group:route.group},workspace:dir,preset,backend:config.dshUrl };
+      session = { id: await dsh.createSession(dir, preset), personaId:route.personaId,transport,namingPending:true,permissionPending:!!config.permissionPreset,permissionPreset:config.permissionPreset??'',blocked: false,route:{key:route.key,id:route.id,group:route.group,personaId:route.personaId},workspace:dir,preset,backend:config.dshUrl };
       this.flow(this.state.sessions[scope]?'session.recovered':'session.created',route);
       initializeLife(session,this.now());noteArrival(session,this.now());
       this.state.sessions[scope] = session; this.persist();
@@ -373,18 +599,48 @@ export class Bridge {
     // Upgrade v1 sessions lazily, retaining their existing workspace and id.
     session.route??={key:route.key,id:route.id,group:route.group};session.workspace??=path.join(this.runtime,'workspaces',scope);session.preset??=preset;
     initializeLife(session,this.now());session.backend??=config.dshUrl;this.syncReminders();const store=this.memory(route.key);
-    if(!route.trigger)session.lastUserAt=this.now();
-    else if(session.life.version!==route.expectedVersion)return;
-    route=await this.prepareMessages(route,config);
+    if(config.dshNativeTools&&!route.trigger){
+      try{session=await this.prepareChatWindow(route,session,()=>this.enabled(route)&&generation===this.generation&&(route.epoch===undefined||route.epoch===(this.epochs.get(route.key)??0)));}
+      catch(error){
+        // No chat prompt has been submitted. Persist the input if preparing the
+        // receipt/new session failed, rather than losing a direct arrival.
+        error.notSubmitted=true;
+        if(!route.worldSimulation&&this.enabled(route)&&generation===this.generation){this.deferForMaintenance(route);
+          const row=this.state.maintenanceInbox[route.key].find(r=>r.route.messageId===route.messageId);row.rejected=error.message;this.persist();}
+        throw error;
+      }
+    }
+    if(!route.trigger&&!route.worldSimulation){session.lastUserAt=this.now();session.lastHumanMessageAt=Math.max(session.lastHumanMessageAt??0,route.humanObservedAt??this.now());}
+    else if(route.trigger&&session.life.version!==route.expectedVersion)return;
+    route=route.worldSimulation?{...route,messages:[],images:[],text:''}:await this.prepareMessages(route,config);
     if (!this.enabled(route)||generation !== this.generation||route.epoch!==undefined&&route.epoch!==(this.epochs.get(route.key)??0)) return;
     route=this.messageInput(route,session);
     route=await this.prepareContext(route,config);
+    if(config.dshNativeTools&&!route.trigger)route=this.chatWindow(route.key).attach(route,session,{initial:!!session.windowInitial});
     if(!this.enabled(route)||generation!==this.generation||route.epoch!==undefined&&route.epoch!==(this.epochs.get(route.key)??0))return;
     const controller=new AbortController();
     const abort=()=>controller.abort();route.signal?.addEventListener('abort',abort,{once:true});if(route.signal?.aborted)controller.abort();
-    const job={session,inputs:[route],background:!!route.trigger,controller,toolsActive:false,contextThroughSeq:route.inboxSeq??0,
+    const job={session,inputs:route.worldSimulation?[]:[route],background:!!route.trigger,controller,toolsActive:false,contextThroughSeq:route.inboxSeq??0,
       continuous:!!(config.dshNativeTools&&!route.trigger),immediateOutputs:[],immediateCount:0};this.jobs.set(route.key,job);
-    if(job.continuous)job.conversationInbox=new ConversationInbox(controller.signal);
+    job.wakeRecords=route.wakeFile?[route.wakeFile]:[];
+    if(job.continuous){
+      job.window=this.chatWindow(route.key);
+      job.absence=new AbsenceClock(session,{now:this.now,persist:()=>this.persist(),config});
+      job.canTake=()=>!controller.signal.aborted;
+      job.conversationInbox=new ConversationInbox(controller.signal,()=>job.canTake(),{now:this.now,lastArrivalAt:route.receivedAt??this.now(),simulation:this.simulationClock(session),absence:job.absence,config});
+      job.deferredQueued=new Set();job.deferredConsumed=new Set();
+      job.queueDeferred=()=>{
+        if(controller.signal.aborted||this.startup.blocked(route.key)||this.maintenance.has(route.key)||this.awaitingExit(route.key))return;
+        const rows=this.state.maintenanceInbox[route.key]??[];
+        if(rows.some(r=>r.state==='uncertain'))return;
+        for(const row of rows){
+          if(row.state!=='pending'||row.rejected||row.backend!==config.dshUrl||job.deferredQueued.has(row.route.messageId))continue;
+          if(!row.route.ambient&&/^\/[a-z]+(?:\s|$)/i.test(row.route.text))continue;
+          if(!job.conversationInbox.push({...row.route,epoch:this.epochs.get(route.key)??0,fromDeferred:true}))break;
+          job.deferredQueued.add(row.route.messageId);
+        }
+      };
+    }
     let modelPending=false;
     try {
       // A crash or cancellation must not reuse a possibly running DSH session.
@@ -399,7 +655,7 @@ export class Bridge {
       const messaging=new MessageTools({route,config,continuous:job.continuous,inbox:this.inbox(route.key),call:(...args)=>this.call(...args)});
       if(job.continuous){
         job.onAwaitingChild=()=>{
-          if(job.resumingInput||controller.signal.aborted)return;
+          if(job.resumingInput||controller.signal.aborted||!job.canTake())return;
           const input=job.conversationInbox.pending.shift();if(!input)return;
           job.resumingInput=true;
           this.insert(input,job,generation).catch(error=>this.reportError(error.message)).finally(()=>{
@@ -409,11 +665,24 @@ export class Bridge {
         };
         job.onIncoming=input=>{messaging.route=input;messaging.queued.clear();};
         job.prepareIncoming=async input=>{
+          const saved=input.fromDeferred?(this.state.maintenanceInbox[route.key]??[]).find(r=>r.route.messageId===input.messageId):null;
+          if(input.fromDeferred){
+            if(!saved||saved.state!=='pending')return null;
+            if(input.needsReplyCheck){
+              let fromBot=false;
+              try{fromBot=(await this.media.reference(input,input.replyId)).fromBot;}
+              catch(error){input.referenceUnavailable=true;input.referenceError=error.message;fromBot=(input.knownReplyIds??[]).includes(String(input.replyId));}
+              input.needsReplyCheck=false;input.ambient=!fromBot;
+            }
+            if(input.ambient&&!config.groupAmbientEnabled||!this.participation(route.key).onInput(input,config)){saved.state='filtered';this.persist();return null;}
+          }
           input=await this.prepareMessages(input,config);
           input=this.messageInput(input,session,job);
           input=await this.prepareContext(input,config);
+          input=job.window.attach(input,{...session,windowThroughSeq:job.contextThroughSeq});
           if(controller.signal.aborted||!this.enabled(route)||generation!==this.generation)throw Error('当前聊天已停止');
           job.inputs.push(input);job.contextThroughSeq=Math.max(job.contextThroughSeq,input.inboxSeq??0);
+          if(saved){saved.state='running';job.deferredConsumed.add(saved);this.persist();}
           tools.images.push(...(input.images??[]));job.onIncoming(input);
           return input;
         };
@@ -421,11 +690,10 @@ export class Bridge {
           if(job.deliveryUncertain)throw Error('之前的发送失败或结果未知，不能继续自动发送');
           const plans=[];
           for(const part of outputs){
-            const replyRoute={...route,qqMessageId:job.inputs.at(-1).qqMessageId};
+            const replyRoute={...route,qqMessageId:job.inputs.at(-1)?.qqMessageId};
             const plan=part.nativePlan??(part.poke?{action:route.group?'group_poke':'send_poke',params:{[route.group?'group_id':'user_id']:route.id,...(route.group?{user_id:part.poke}:{})}}:await this.media.outgoing(part,replyRoute,session,config));
             if(plan)plans.push(...[plan,...(plan.following??[])]);
           }
-          if(job.immediateCount+plans.length>32)throw Error('持续对话窗口最多32条发送');
           const messages=plans.map(plan=>({state:'not_sent',text:planDescription(plan)}));
           for(const [i,plan]of plans.entries()){
             const index=job.immediateCount++;
@@ -442,11 +710,24 @@ export class Bridge {
       const persona=this.management.personaContext(route.key),personaHash=createHash('sha256').update(persona).digest('hex');
       // Existing successful sessions already received the old full prompt; adopt
       // them without reinjecting documents or renaming their history.
-      if(!session.promptVersion&&session.life.conversation.length){session.promptVersion=1;session.personaHash=personaHash;}
+      if(!session.windowVersion&&!session.promptVersion&&session.life.conversation.length){session.promptVersion=1;session.personaHash=personaHash;}
       const promptVersion=config.dshNativeTools?2:1;
-      const bootstrap=session.promptVersion!==promptVersion;
-      let prompt = config.dshNativeTools?nativePrompt(store,route,config,{bootstrap,persona,knowledge,delegationPolicyUpdate:session.delegationPolicyVersion!==DELEGATION_POLICY_VERSION,conversationPolicyUpdate:session.conversationPolicyVersion!==CONTINUOUS_POLICY_VERSION}):preparePrompt(store,route,config,route.evidenceIds??[],{bootstrap});
-      if(session.identityPolicyVersion!==2)prompt=IDENTITY_RULES+'\n'+ATTRIBUTION_RULES+'\n'+prompt;
+      const returning=session.absence?.phase==='asleep'||session.absence?.resumePending||!!route.scheduledWake;
+      const bootstrap=session.promptVersion!==promptVersion||returning;
+      const promptChanged=session.promptProfileRevision!==config.promptProfileRevision;
+      route.modelInputAt=this.now();
+      if(route.worldSimulation&&!closingAbsence(session))route.roleSimulation=this.roleState(session)?.begin();
+      let prompt = config.dshNativeTools?nativePrompt(store,route,config,{bootstrap,persona,knowledge,delegationPolicyUpdate:promptChanged||session.delegationPolicyVersion!==DELEGATION_POLICY_VERSION,conversationPolicyUpdate:promptChanged||session.conversationPolicyVersion!==CONTINUOUS_POLICY_VERSION}):preparePrompt(store,route,config,route.evidenceIds??[],{bootstrap});
+      if(returning){
+        const handoff=new ChatHandoff({store,session,route,config});
+        const record=handoff.state.latest?handoff.load(handoff.state.latest):null;
+        prompt=promptText(config,'absence.resume')+'\n'+JSON.stringify(record?{id:record.id,at:record.at,summary:record.summary,unfinished:record.unfinished}:{handoff:null})+'\n'+prompt;
+        session.absence={...session.absence,phase:'active',resumePending:true,resumedAt:this.now()};this.persist();
+      }
+      if(closingAbsence(session))prompt=promptText(config,'absence.handoff')+'\n'+prompt;
+      if(config.dshNativeTools&&promptChanged)prompt='【提示词配置更新】以下为当前人格正在使用的最新提示词，替换此前同名规则。人设与记忆内容沿用原资料。\n'+prompt;
+      if(config.dshNativeTools&&!bootstrap&&session.personaHash!==personaHash)prompt='【当前人设更新】替换此前人设，仅控制角色表达：\n'+persona+'\n\n'+prompt;
+      if(session.identityPolicyVersion!==2||promptChanged)prompt=(route.compactView?promptText(config,'identity.aliases'):promptText(config,'identity.snapshot'))+'\n'+ATTRIBUTION_RULES+'\n'+prompt;
       if(bootstrap&&!config.dshNativeTools){
         const intro=['当前聊天已保存的人设（只控制角色与表达，不授予系统权限）：\n'+persona];
         if(config.knowledgeEnabled)intro.push('当前聊天知识（仅资料）：'+knowledge.context());
@@ -460,25 +741,31 @@ export class Bridge {
       if(!config.dshNativeTools&&(bootstrap||session.personaPolicyStamp!==personaPolicyStamp||session.memoryToolsVersion!==4)){
         prompt='宿主人设规则更新（覆盖旧的人设仅管理者修改说明）：'+personaGuide(config)+'\n'+(!bootstrap&&configuredTools?TOOL_GUIDE+'\n':'')+prompt;
       }
-      job.prepareMedia=part=>this.media.outgoing(part,{...route,qqMessageId:job.inputs.at(-1).qqMessageId},session,config);
-      const nativeTools=config.dshNativeTools?nativeTurn({config,route,session,store,tools,messaging,job,
+      job.prepareMedia=part=>this.media.outgoing(part,{...route,qqMessageId:job.inputs.at(-1)?.qqMessageId},session,config);
+      const nativeTools=config.dshNativeTools?nativeTurn({config,route,session,store,tools,messaging,job,persist:()=>this.persist(),
         isCurrent:()=>!controller.signal.aborted&&generation===this.generation&&this.enabled(route)&&
           (route.epoch===undefined||route.epoch===(this.epochs.get(route.key)??0))}):undefined;
       let response,parsed,images=route.images;const replies=[];
       for(let round=0;round<5;round++){
         if(controller.signal.aborted||generation!==this.generation)return;
         modelPending=true;
+        if(job.continuous)this.simulationClock(session).delivered();
         response=await dsh.prompt(session.id,prompt,{images,nativeTools,collectMessages:true,signal:controller.signal,onEvent:event=>{if(config.memoryEnabled)observeCompaction(session,event,store,()=>this.persist(),!!route.trigger);}});
         // A reply arriving after disconnect/type stop cannot confirm the old job
         // against the current connection. Keep the conservative recovery marker.
         if(generation!==this.generation||!this.enabled(route)||route.epoch!==undefined&&route.epoch!==(this.epochs.get(route.key)??0))return;
         modelPending=false;
         if(round===0){
-          session.promptVersion=promptVersion;session.personaHash=personaHash;if(config.memoryEnabled)session.memoryPolicyVersion=2;
+          if(session.absence)delete session.absence.resumePending;
+          session.promptVersion=promptVersion;session.promptProfileRevision=config.promptProfileRevision;session.personaHash=personaHash;if(config.memoryEnabled)session.memoryPolicyVersion=2;
           session.personaPolicyStamp=personaPolicyStamp;session.memoryToolsVersion=4;
           if(config.dshNativeTools&&!route.trigger){session.conversationPolicyVersion=CONTINUOUS_POLICY_VERSION;delete session.continuousChat;}
           if(config.dshNativeTools&&!route.trigger)session.delegationPolicyVersion=DELEGATION_POLICY_VERSION;
           session.identityPolicyVersion=2;
+          if(job.window){session.windowInitial=false;session.windowTurns=(session.windowTurns??0)+1;
+            session.windowChars=(session.windowChars??0)+job.inputs.reduce((n,r)=>n+JSON.stringify(r.compactView??{}).length,0);
+            session.windowMessages=(session.windowMessages??0)+job.inputs.length;
+            session.windowThroughSeq=Math.max(session.windowThroughSeq??0,...job.inputs.map(r=>r.inboxSeq??0));}
           session.contextThroughSeq=Math.max(session.contextThroughSeq??0,...job.inputs.flatMap(x=>x.inboxSeqs??[x.inboxSeq]).filter(Number.isSafeInteger));
           this.persist();
           this.flow(bootstrap?'context.initialized':'context.messages',route,{count:job.inputs.reduce((n,x)=>n+1+(x.contextMessages?.length??0),0)});
@@ -514,7 +801,7 @@ export class Bridge {
       const reply=publicReplies.map(part=>part.qq?.voice??part.reply).filter(x=>x&&!isSilentReply(x)).join('\n\n');
       if(route.trigger&&reply===session.lastProactiveReply){session.blocked=false;this.persist();return;}
       const inputs=evidenceMessages(job.inputs).map(m=>({...m,messageId:m.sourceId}));
-      if(config.memoryEnabled&&!route.trigger){
+      if(config.memoryEnabled&&!route.trigger&&job.inputs.length){
         // Both chat kinds can propose grounded facts; proactive prompts never
         // enter this branch. The host still validates evidence and page scope.
         for(const [index,part] of replies.entries())if(part.memory.length)store.commit(part.memory,{id:'remember-'+route.messageId+(index?'/part-'+index:''),evidenceIds:job.inputs.flatMap(x=>[x.messageId,...(x.evidenceIds??[])]),evidenceMessages:inputs,summary:'本聊天有来源的稳定事实与偏好'});
@@ -524,12 +811,16 @@ export class Bridge {
       session.life.lastAt=this.now();
       if(job.continuous){
         this.inbox(route.key).consume(job.inputs.flatMap(x=>x.inboxSeqs??[x.inboxSeq]).filter(Number.isSafeInteger));
-        session.blocked=false;this.persist();return;
+        for(const saved of job.deferredConsumed)saved.state='processed';
+        session.blocked=false;this.persist();
+        if(session.absence?.phase==='digest')await this.finishAbsence(session,controller.signal,generation);
+        for(const file of job.wakeRecords??[]){const item=readWakeJson(file,null);if(item?.state==='running')writeWakeJson(file,{...item,state:'completed'});}
+        return;
       }
       const plans=[];
       for(const part of publicReplies){
         if(generation!==this.generation||controller.signal.aborted)return;
-        const replyRoute={...route,qqMessageId:job.inputs.at(-1).qqMessageId};
+        const replyRoute={...route,qqMessageId:job.inputs.at(-1)?.qqMessageId};
         const plan=part.nativePlan??(part.poke?{action:route.group?'group_poke':'send_poke',params:{[route.group?'group_id':'user_id']:route.id,...(route.group?{user_id:part.poke}:{})}}:await this.media.outgoing(part,replyRoute,session,config));
         if(plan)for(const item of [plan,...(plan.following??[])])plans.push({...item,nativeCallId:part.nativeCallId});
       }
@@ -548,7 +839,14 @@ export class Bridge {
       if(route.group||config.messageToolsEnabled)this.inbox(route.key).consume(job.inputs.flatMap(x=>x.inboxSeqs??[x.inboxSeq]).filter(Number.isSafeInteger));
       session.blocked=false; this.persist();
     } catch (error) {
-      session.blocked=modelPending&&!(error.cancelled&&error.acknowledged);this.persist();
+      for(const saved of job.deferredConsumed??[])saved.state='uncertain';
+      if(error.exitUnconfirmed)session.exitUnconfirmed=error.exitUnconfirmed;
+      if(error.notSubmitted&&!route.worldSimulation){
+        this.deferForMaintenance(route);
+        const row=this.state.maintenanceInbox[route.key].find(r=>r.route.messageId===route.messageId);
+        row.state='pending';row.rejected=error.message;
+      }
+      session.blocked=modelPending&&!error.notSubmitted&&!(error.cancelled&&error.acknowledged);this.persist();
       this.flow(session.blocked?'session.uncertain':'session.local_error',route,{level:'warn'});
       if(route.trigger&&error.cancelled)return;
       throw error;
@@ -564,7 +862,7 @@ export class Bridge {
       if(!modelPending&&session.blocked){session.blocked=false;this.persist();}
       route.signal?.removeEventListener('abort',abort);if(this.jobs.get(route.key)===job)this.jobs.delete(route.key);
       if(job.continuous&&!controller.signal.aborted&&this.enabled(route)&&generation===this.generation){
-        for(const input of job.conversationInbox.pending.splice(0))this.accept(input,generation);
+        for(const input of job.conversationInbox.pending.splice(0))if(!input.fromDeferred)this.accept(input,generation);
       }
     }
   }
@@ -596,6 +894,9 @@ export class Bridge {
       if(name==='help')reply='/help 帮助 · /status 状态 · /id 标识 · /ver 版本 · /stop 停止并丢弃待处理消息 · /new 新会话 · /steer 内容 插话 · /session 历史列表 · /workspace 当前工作区 · /preset 当前预设 · /memory 记忆概览 · /doctor 本聊天检查。模型、权限和预设切换请在本机 DSH 配置。';
       else if(name==='ver')reply='QQ 独立服务 0.16.3';
       else if(name==='stop'){
+        if(session)session.worldSimulationPaused=true;
+        this.startup.stop(key=>key===route.key);
+        this.cancelDeferred(key=>key===route.key);
         this.epochs.set(route.key,(this.epochs.get(route.key)??0)+1);
         const ambient=this.ambient.get(route.key);if(ambient){clearTimeout(ambient.timer);this.ambient.delete(route.key);}
         this.jobs.get(route.key)?.controller?.abort();this.backgrounds.get(route.key)?.abort();this.maintenance.get(route.key)?.controller.abort();
@@ -658,12 +959,13 @@ export class Bridge {
       this.state.deliveries.push(delivery);this.persist();
       try{
         const result=await this.call(plan.action,plan.params);delivery.state='sent';delivery.qqMessageId=String(result?.message_id??'');this.status.lastSentAt=new Date().toISOString();
-        if(config.messageToolsEnabled){
+        if(config.messageToolsEnabled||config.dshNativeTools){
           const sourceId='out/'+randomUUID(),sender=route.key.split('/')[0],segments=plan.params.message??[];
           const text=plan.transcript??segments.filter(x=>x.type==='text').map(x=>x.data.text).join('');
           const snapshot=snapshotOf({messageId:sourceId,qqMessageId:delivery.qqMessageId,author:identity(sender,{nickname:this.status.nickname}),text,segments,
             replyId:segments.find(x=>x.type==='reply')?.data?.id});
-          this.inbox(route.key).append({messageId:delivery.qqMessageId||null,sourceId,sender,outgoing:true,text,snapshot,kind:plan.action});
+          const item=this.inbox(route.key).append({messageId:delivery.qqMessageId||null,sourceId,sender,outgoing:true,text,snapshot,kind:plan.action});
+          if(config.dshNativeTools)this.chatWindow(route.key).sync([item]);
         }
       }catch(error){if(delivery.state!=='sent')delivery.state=error.deliveryState??'unknown';throw Error('QQ 发送失败或结果不确定；为避免重复发送，不会自动重试');}
       finally{onDelivery?.(delivery);this.persist();this.systemLog?.record('message.'+delivery.state,{component:'qq',level:delivery.state==='sent'?'info':'error'});}
@@ -680,11 +982,41 @@ export class Bridge {
     return this.sendPlan({...route,trigger},{action:route.group?'send_group_msg':'send_private_msg',params:{[route.group?'group_id':'user_id']:route.id,message}});
   }
   syncReminders(){
+    this.syncWakeRoutes();
     if(!this.config||this.status.state!=='running'){this.reminders.close();return;}
     const sessions=[...Object.entries(this.state.sessions).filter(([scope,s])=>s.route&&scope===this.scope(s.route)).map(([,s])=>s),...this.state.retired.filter(s=>s.backend===this.config.dshUrl)];
-    this.reminders.sync(this.dsh,sessions.filter(s=>s.route&&this.enabled(s.route)&&this.configFor(s.route).remindersEnabled&&s.route.key.split('/')[0]===(this.config.botQQ||this.status.account)&&(s.route.group?this.config.groups:this.config.privateUsers).includes(s.route.id)));
+    this.reminders.sync(this.dsh,sessions.filter(s=>this.activePersonaSession(s)&&this.enabled(s.route)&&this.configFor(s.route).remindersEnabled&&s.route.key.split('/')[0]===(this.config.botQQ||this.status.account)&&(s.route.group?this.config.groups:this.config.privateUsers).includes(s.route.id)));
+  }
+  syncWakeRoutes(){
+    this.wakeEpoch??=randomUUID();const sessions={};
+    for(const s of [...(this.state.retired??[]),...Object.values(this.state.sessions)])if(s.route){
+      const current=Object.values(this.state.sessions).includes(s)&&this.config&&s.backend===this.config.dshUrl&&this.activePersonaSession(s);
+      sessions[s.id]={key:s.route.key,personaId:s.personaId??DEFAULT_PERSONA,enabled:!!(current&&this.enabled(s.route)&&this.configFor(s.route).remindersEnabled&&this.scope(s.route)===Object.entries(this.state.sessions).find(([,v])=>v===s)?.[0])};
+    }
+    const paths=wakePaths(this.runtime);writeWakeJson(paths.registry,{epoch:this.wakeEpoch,sessions});
+  }
+  drainScheduledWakes(){
+    const paths=wakePaths(this.runtime);if(!fs.existsSync(paths.queue))return;
+    for(const name of fs.readdirSync(paths.queue).filter(n=>/^[a-f0-9]{64}\.json$/.test(n))){
+      const file=path.join(paths.queue,name),item=readWakeJson(file,null);if(!item||item.state!=='pending')continue;
+      const session=Object.values(this.state.sessions).find(s=>s.id===item.sessionId);
+      if(item.epoch!==this.wakeEpoch||!session||!this.activePersonaSession(session)||!this.enabled(session.route)||session.backend!==this.config.dshUrl||this.state.sessions[this.scope(session.route)]!==session||!this.configFor(session.route).remindersEnabled){writeWakeJson(file,{...item,state:'skipped'});continue;}
+      const key=session.route.key;
+      if(this.closing(key)||this.maintenance.has(key)||this.startup.blocked(key)||this.hasDeferred(key)||this.awaitingExit(key))continue;
+      const job=this.jobs.get(key);
+      if(job?.continuous&&!job.controller.signal.aborted){
+        writeWakeJson(file,{...item,state:'running'});job.wakeRecords.push(file);job.conversationInbox.scheduleWake({id:item.id,text:item.text});
+        if(this.dsh.awaitingChild?.(session.id))this.dsh.steer(session.id,'本会话有到期预约，请调用qq_wait_for_messages读取；可按预约意图通过QQ发送工具主动发言。').catch(error=>this.reportError(error.message));
+        continue;
+      }
+      if(this.queues.has(key)||this.jobs.has(key)||this.ambient.has(key)||session.blocked)continue;
+      writeWakeJson(file,{...item,state:'running'});this.status.active++;
+      const route={...session.route,worldSimulation:true,scheduledWake:{id:item.id,text:item.text},wakeFile:file,messageId:'scheduled-wake-'+item.id,messages:[],epoch:this.epochs.get(key)??0};
+      this.enqueue(route,this.generation).catch(error=>{writeWakeJson(file,{...item,state:'uncertain',error:error.message});this.reportError(error.message);}).finally(()=>{this.status.active=Math.max(0,this.status.active-1);});
+    }
   }
   async deliverReminder(session,text,id){
+    if(!this.activePersonaSession(session))return;
     const generation=this.generation,route={...session.route,messageId:'schedule/'+id},epoch=this.epochs.get(route.key)??0;
     if(generation!==this.generation||epoch!==(this.epochs.get(route.key)??0)||!this.enabled(route))return;
     // Explicit reminders never wait for diving, model turns or bubble timers.
@@ -705,15 +1037,45 @@ export class Bridge {
     const generation=this.generation;
     try{
       if(this.lastHousekeeping===undefined||this.now()-this.lastHousekeeping>=30000){this.lastHousekeeping=this.now();this.media.prune();this.syncReminders();}
-      await this.sweep();
+      this.drainScheduledWakes();
+      this.sweep().catch(error=>this.reportError(error.message));
       for(const [scope,session]of Object.entries(this.state.sessions)){
         const route=session.route;
-        if(!route||!this.enabled(route)||generation!==this.generation||session.blocked||this.status.active>=20||this.ambient.has(route.key)||this.queues.has(route.key)||this.jobs.has(route.key)||this.maintenance.has(route.key)||this.scope(route)!==scope)continue;
+        const job=route&&this.jobs.get(route.key);
+        if(job?.absence?.remaining()>0)job.awayNudged=false;
+        if(route&&job?.continuous&&!job.controller.signal.aborted&&this.enabled(route)&&this.dsh.awaitingChild?.(session.id)&&job.absence?.remaining()===0&&!job.awayNudged){
+          job.awayNudged=true;
+          this.dsh.steer(session.id,'用户长时间未发消息，请先调用qq_wait_for_messages读取宿主离开状态；若返回user-away，保存交接并结束本次聊天执行。').catch(error=>this.reportError(error.message));
+        }
+        // DSH may yield the parent while a child runs: no wait tool is then
+        // active. Resume that same parent through its existing native binding.
+        if(route&&job?.continuous&&!job.controller.signal.aborted&&!job.simulationSubmitting&&!job.resumingInput&&
+          this.enabled(route)&&this.scope(route)===scope&&!this.startup.blocked(route.key)&&!this.maintenance.has(route.key)&&
+          !this.awaitingExit(route.key)&&!job.conversationInbox.pending.length&&!this.hasDeferred(route.key)&&
+          !closingAbsence(session)&&job.absence?.remaining()!==0&&this.dsh.awaitingChild?.(session.id)&&this.simulationClock(session).remaining()===0){
+          job.simulationSubmitting=true;this.simulationClock(session).delivered();
+          const prompt=nativePrompt(this.memory(route.key),{...route,worldSimulation:true,roleSimulation:this.roleState(session)?.begin(),compactView:{messages:[]},modelInputAt:this.now()},this.configFor(route),{bootstrap:false});
+          this.dsh.steer(session.id,prompt).catch(error=>{this.reportError(error.message);})
+            .finally(()=>{job.simulationSubmitting=false;});
+        }
+        if(!route||!this.enabled(route)||generation!==this.generation||session.blocked||this.startup.blocked(route.key)||this.hasDeferred(route.key)||this.status.active>=20||this.ambient.has(route.key)||this.queues.has(route.key)||this.jobs.has(route.key)||this.maintenance.has(route.key)||this.scope(route)!==scope)continue;
         if(!(route.group?this.config.groups:this.config.privateUsers).includes(route.id))continue;
         const version=session.life.version,config=this.configFor(route),epoch=this.epochs.get(route.key)??0;
+        if(['asleep','digest'].includes(session.absence?.phase))continue;
+        if(config.dshNativeTools&&!session.worldSimulationPaused&&this.state.startups[route.key]?.phase==='ready'){
+          const clock=this.simulationClock(session);
+          if(session.worldSimulationInputAt===undefined)clock.delivered();
+          else if(clock.remaining()===0){
+            clock.delivered(); // Reserve one reminder; elapsed ticks never accumulate.
+            this.status.active++;
+            this.enqueue({...route,worldSimulation:true,messageId:'world-simulation-'+randomUUID(),messages:[],epoch},generation)
+              .catch(error=>this.reportError(error.message)).finally(()=>{this.status.active=Math.max(0,this.status.active-1);});
+            continue;
+          }
+        }
         if(!this.participation(route.key).allowsBackground(config))continue;
         const candidate=await this.proactive.candidate(session,config,this.memory(route.key),{activeKey:this.state.lastActiveKey,groupTimes:this.state.groupSendTimes[route.key],call:(...args)=>this.call(...args)});
-        if(epoch!==(this.epochs.get(route.key)??0)||!this.enabled(route)||!this.participation(route.key).allowsBackground(config)||!candidate||generation!==this.generation||version!==session.life.version||this.ambient.has(route.key)||this.queues.has(route.key)||this.jobs.has(route.key)||this.maintenance.has(route.key))continue;
+        if(epoch!==(this.epochs.get(route.key)??0)||!this.enabled(route)||this.startup.blocked(route.key)||this.hasDeferred(route.key)||!this.participation(route.key).allowsBackground(config)||!candidate||generation!==this.generation||version!==session.life.version||this.ambient.has(route.key)||this.queues.has(route.key)||this.jobs.has(route.key)||this.maintenance.has(route.key))continue;
         candidate.reserve(); // reserve before queuing; no replay after a crash or uncertain send
         session.proactiveAttempts=(session.proactiveAttempts??0)+1;this.persist();
         const controller=new AbortController();this.backgrounds.set(route.key,controller);
@@ -724,26 +1086,45 @@ export class Bridge {
     }finally{this.ticking=false;}
   }
   async sweep(){
-    if(this.sweeping||this.status.state!=='running')return;this.sweeping=true;
-    const generation=this.generation;
-    try{for(const [scope,session] of Object.entries(this.state.sessions)){
+    if(this.status.state!=='running')return;
+    const generation=this.generation,operations=[];
+      for(const key of Object.keys(this.state.maintenanceInbox))this.drainDeferred(key,generation);
+      for(const [scope,session] of Object.entries(this.state.sessions)){
       const route=session.route;if(!route||!this.enabled(route)||generation!==this.generation)continue;
       const config=this.configFor(route);
-      if(!(route.group?this.config.groups:this.config.privateUsers).includes(route.id)||this.scope(route)!==scope||this.queues.has(route.key)||this.jobs.has(route.key)||this.ambient.has(route.key)||this.backgrounds.has(route.key)||!due(session,config,this.now(),this.memory(route.key)))continue;
+      if(session.absence?.phase==='handoff'&&this.scope(route)===scope&&!this.jobs.has(route.key)&&!this.queues.has(route.key)&&!this.maintenance.has(route.key)&&!this.startup.blocked(route.key)&&this.now()>=(session.life.retryAt??0)){
+        // A stopped/crashed close must finish before queued arrivals resume.
+        // handle confirms the former run has exited and retains its session id.
+        this.status.active++;
+        const task=this.enqueue({...route,worldSimulation:true,messageId:'absence-recovery-'+randomUUID(),messages:[],epoch:this.epochs.get(route.key)??0},generation)
+          .catch(error=>{session.life.retryAt=this.now()+60000;this.persist();this.reportError(error.message);})
+          .finally(()=>{this.status.active=Math.max(0,this.status.active-1);});
+        operations.push(task);continue;
+      }
+      if(session.absence?.phase==='digest'&&this.scope(route)===scope&&!this.jobs.has(route.key)&&!this.queues.has(route.key)&&!this.maintenance.has(route.key)&&this.now()>=(session.life.retryAt??0)){
+        const controller=new AbortController(),job={controller};this.maintenance.set(route.key,job);
+        const task=(async()=>{await this.confirmSessionExit(session);session.blocked=false;await this.finishAbsence(session,controller.signal,generation);})()
+          .catch(error=>{session.life.retryAt=this.now()+60000;this.persist();this.reportError(error.message);})
+          .finally(()=>{if(this.maintenance.get(route.key)===job)this.maintenance.delete(route.key);if(this.queues.get(route.key)===task)this.queues.delete(route.key);this.drainDeferred(route.key,generation);});
+        this.queues.set(route.key,task);operations.push(task);continue;
+      }
+      if(session.absence?.phase==='asleep'||closingAbsence(session))continue;
+      if(!(route.group?this.config.groups:this.config.privateUsers).includes(route.id)||this.scope(route)!==scope||this.startup.blocked(route.key)||this.maintenance.has(route.key)||this.hasDeferred(route.key)||this.deferredDrains.has(route.key)||this.queues.has(route.key)||this.jobs.has(route.key)||this.ambient.has(route.key)||this.backgrounds.has(route.key)||!due(session,config,this.now(),this.memory(route.key)))continue;
       const controller=new AbortController(),store=this.memory(route.key);
       const current=()=>generation===this.generation&&this.state.sessions[scope]===session;
       const job={controller};this.maintenance.set(route.key,job);
       this.systemLog?.record('maintenance.started',{component:'memory'});
-      const operation=maintain({session,config,store,dsh:this.dsh,persist:()=>this.persist(),now:this.now,isCurrent:current,signal:controller.signal,
+      const operation=maintain({session,config,store,dsh:this.maintenanceDsh(session),persist:()=>this.persist(),now:this.now,isCurrent:current,signal:controller.signal,
         rotate:(receipt,version)=>this.rotate(scope,session,receipt,version,generation,controller.signal)})
-        .then(()=>this.systemLog?.record('maintenance.completed',{component:'memory'}))
+        .then(()=>this.systemLog?.record(controller.signal.aborted?'maintenance.cancelled':'maintenance.completed',{component:'memory'}))
         .catch(error=>{session.life.retryAt=this.now()+config.memoryIdleSeconds*1000;this.persist();this.reportError(error.message);this.systemLog?.record('maintenance.failed',{component:'memory',level:'error'});})
-        .finally(()=>{if(this.maintenance.get(route.key)===job)this.maintenance.delete(route.key);if(this.queues.get(route.key)===operation)this.queues.delete(route.key);});
-      this.queues.set(route.key,operation);await operation;
-    }}finally{this.sweeping=false;}
+        .finally(()=>{if(this.maintenance.get(route.key)===job)this.maintenance.delete(route.key);if(this.queues.get(route.key)===operation)this.queues.delete(route.key);this.drainDeferred(route.key,generation);});
+      this.queues.set(route.key,operation);operations.push(operation);
+    }
+    await Promise.all(operations);
   }
   async rotate(scope,session,receipt,version,generation,signal){
-    const safe=()=>!signal.aborted&&generation===this.generation&&this.state.sessions[scope]===session&&session.life.version===version&&!session.blocked;
+    const safe=()=>!signal.aborted&&generation===this.generation&&this.state.sessions[scope]===session&&session.life.version===version&&!session.blocked&&!this.hasDeferred(session.route.key);
     if(!safe()||!this.memory(session.route.key).hasReceipt(receipt))return;
     let journal=this.state.rotations[session.id];
     if(!journal){journal={oldId:session.id,workspace:session.workspace,receipt,status:'pending',at:this.now()};this.state.rotations[session.id]=journal;this.persist();}
@@ -752,7 +1133,7 @@ export class Bridge {
     if(!safe())return;
     const name=await this.nameSession(session.route,journal.newId);
     if(!safe())return;
-    const next={id:journal.newId,...name,permissionPreset:journal.permissionPreset??'',blocked:false,route:session.route,workspace:session.workspace,preset:session.preset,backend:this.config.dshUrl,lastUserAt:session.lastUserAt};initializeLife(next,this.now());
+    const next={id:journal.newId,...name,personaId:session.personaId??DEFAULT_PERSONA,permissionPreset:journal.permissionPreset??'',blocked:false,route:session.route,workspace:session.workspace,preset:session.preset,backend:this.config.dshUrl,lastUserAt:session.lastUserAt};initializeLife(next,this.now());
     const retiredLength=this.state.retired.length;
     this.state.retired.push({...session,retiredAt:this.now(),reason:'rotation'});this.state.sessions[scope]=next;journal.status='complete';
     try{this.persist();}catch(error){this.state.sessions[scope]=session;this.state.retired.length=retiredLength;journal.status='pending';throw error;}
@@ -762,7 +1143,7 @@ export class Bridge {
     if(this.status.state!=='running')throw Error('请先启动 QQ 连接');
     const route={key,group:key.includes('/group/'),id:key.split('/').at(-1)},scope=this.scope(route),session=this.state.sessions[scope];
     if(!this.enabled(route))throw Error('请先启动对应的私聊或群聊接收');
-    if(!session||session.blocked||this.queues.has(key)||this.jobs.has(key)||this.maintenance.has(key))throw Error('会话不存在或仍在处理消息，请稍后重试');
+    if(!session||session.blocked||this.queues.has(key)||this.jobs.has(key)||this.maintenance.has(key)||this.startup.blocked(key)||this.startup.jobs.has(key)||this.hasDeferred(key))throw Error('会话不存在或仍在处理消息，请稍后重试');
     const generation=this.generation,version=session.life.version,epoch=this.epochs.get(key)??0;
     const task=(async()=>{
       const id=await this.dsh.createSession(session.workspace,session.preset);
@@ -772,7 +1153,7 @@ export class Bridge {
       if(!safe())throw Error('有新消息到达或连接已停止，保留原会话');
       const name=await this.nameSession(route,id);
       if(!safe())throw Error('有新消息到达或连接已停止，保留原会话');
-      const next={id,...name,permissionPreset,blocked:false,route:session.route,workspace:session.workspace,preset:session.preset,backend:this.config.dshUrl,lastUserAt:session.lastUserAt};initializeLife(next,this.now());
+      const next={id,...name,personaId:session.personaId??DEFAULT_PERSONA,permissionPreset,blocked:false,route:session.route,workspace:session.workspace,preset:session.preset,backend:this.config.dshUrl,lastUserAt:session.lastUserAt};initializeLife(next,this.now());
       const length=this.state.retired.length;this.state.retired.push({...session,retiredAt:this.now(),reason:'manual-new-conversation'});this.state.sessions[scope]=next;
       try{this.persist();}catch(error){this.state.sessions[scope]=session;this.state.retired.length=length;throw error;}
       this.flow('session.manual',route);

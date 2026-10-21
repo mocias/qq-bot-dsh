@@ -112,6 +112,7 @@ export class Media {
         else if(item.type==='face')add(faceToEmoji(String(d.id)));
         else if(item.type==='reply'){
           try{
+            if(route.referenceUnavailable)throw Error('引用内容不可读取');
             if(depth>=2)throw Error('引用嵌套过深');
             const original=await this.reference(route,d.id);
             (scope.rawSources??=[]).push({kind:'reply',messageId:String(d.id),data:original});
@@ -194,7 +195,8 @@ export class Media {
   }
   async outgoing(parsed,route,session,config){
     const q=parsed.qq??{};
-    if(!q||typeof q!=='object'||Array.isArray(q)||Object.keys(q).some(k=>!['images','voice','forward','file','video','replyTo','at'].includes(k)))throw Error('QQ 输出格式无效');
+    if(!q||typeof q!=='object'||Array.isArray(q)||Object.keys(q).some(k=>!['images','voice','voiceStyle','forward','file','video','replyTo','at'].includes(k)))throw Error('QQ 输出格式无效');
+    if(q.voiceStyle!==undefined&&(typeof q.voice!=='string'||typeof q.voiceStyle!=='string'||q.voiceStyle.length>300))throw Error('语音情绪说明无效');
     if(('images'in q&&!Array.isArray(q.images))||('forward'in q&&!Array.isArray(q.forward))||('voice'in q&&typeof q.voice!=='string'))throw Error('QQ 输出格式无效');
     const kinds=[Array.isArray(q.images)&&q.images.length>0,typeof q.voice==='string'&&!!q.voice,Array.isArray(q.forward)&&q.forward.length>0,!!q.file,!!q.video].filter(Boolean).length;
     if(kinds>1)throw Error('一次回复只能选择一种多媒体形式');
@@ -226,7 +228,8 @@ export class Media {
     const quiet=config.voiceQuietMode==='always'||(config.voiceQuietMode!=='never'&&(config.voiceQuietStart<config.voiceQuietEnd?hour>=config.voiceQuietStart&&hour<config.voiceQuietEnd:config.voiceQuietStart>config.voiceQuietEnd&&(hour>=config.voiceQuietStart||hour<config.voiceQuietEnd)));
     if(!quiet&&(!route.group||config.groupVoiceSend)&&(q.voice||tagged||config.voiceReplyMode==='voice')&&!textReason(voiceText,policy,new Date(this.now()))){
       try{
-        const result=await this.voice.synthesize(voiceText,config),data=this.voice.audio(result.id),info=wavInfo(data);
+        const voiceConfig=q.voiceStyle&&config.voiceProvider==='mimo'?{...config,mimoStyle:[config.mimoStyle,q.voiceStyle].filter(Boolean).join('\n')}:config;
+        const result=await this.voice.synthesize(voiceText,voiceConfig),data=this.voice.audio(result.id),info=wavInfo(data);
         if(info.duration_seconds>60||data.length>MAX)throw Error('语音过长');
         segments=[{type:'record',data:{file:'base64://'+data.toString('base64')}}];
       }catch{reply=voiceText;} // Only preparation failure falls back. Never retry an uncertain send.

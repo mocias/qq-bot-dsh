@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto';
 const bool=(label,section,kinds)=>({type:'boolean',label,section,kinds});
 const number=(label,section,min,max)=>({type:'number',label,section,min,max});
 export const policyFields={
+  userAwaySeconds:{...number('用户离开判定时长（秒）','会话与记忆',1,604800),help:'默认1800秒（30分钟）。只按最后一条用户消息计时，群聊按任何群成员来信；模拟、机器人发言及定时唤醒不重置。到期保存交接并整理记忆后休眠，新消息或定时任务在原会话恢复。'},
   messageToolsEnabled:{...bool('消息查询与未读管理工具','消息功能'),help:'仅查询本机接入后保留的本聊天最近500条消息；允许群的未提及消息也进入索引，但不会因此自动回复。关闭后仍保留原生聊天的基本发送与等待能力。'},
   quoteMode:{type:'select',label:'引用回复',section:'消息功能',options:{auto:'按需引用',never:'不发送引用',always:'普通回复默认引用当前消息'}},
   mentionSend:bool('允许群内 @ 指定成员','消息功能',['group']),
@@ -62,7 +63,7 @@ export const policyFields={
   groupMaxRepliesPerHour:{...number('每小时最大发送次数（0 不限制）','群消息触发接话',0,10080),kinds:['group']},
   groupToolsEnabled:bool('群聊专用搜索、记忆与工作区工具','群消息触发接话',['group']),
   adminUsers:{type:'ids',label:'允许使用 QQ 控制命令的管理员（每行一个）',section:'控制与提醒'},
-  remindersEnabled:{...bool('接收 DSH 定时任务的完成结果','控制与提醒'),help:'DSH 闹钟是 DSH 的 schedule 定时任务插件。此开关只把属于本聊天的任务结果转发到 QQ，不负责创建任务，也不是定时主动搭话。离线结果不补发。'},
+  remindersEnabled:{...bool('允许 DSH 定时唤醒并主动发消息','控制与提醒'),help:'当前人格可用 DSH schedule 工具预约。到期后 QQ 服务在原会话恢复发送工具，由模型结合人设、交接和记忆决定主动发言；不会原样转发提醒。需同时开启对应聊天接收，手动停止时不唤醒、不补发。'},
 };
 export const kindOf=scope=>scope==='private'||scope==='group'?scope:scope.split('/')[1];
 export const fieldsFor=kind=>Object.fromEntries(Object.entries(policyFields).filter(([,s])=>!s.kinds||s.kinds.includes(kind)));

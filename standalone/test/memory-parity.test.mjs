@@ -49,7 +49,7 @@ test('stale reminders use log/index mtime, persist cooldown/cap, require human c
   fs.utimesSync(store.safe('index.md'),Date.now()/1000,Date.now()/1000);assert.equal(due(restored,config,Date.now(),store),null);
 });
 
-test('all trigger reasons coalesce; new arrivals cancel no-compression digest without losing input',async t=>{
+test('all trigger reasons coalesce; explicit version invalidation prevents a stale digest commit',async t=>{
   const {store,session}=fixture(t),config={...defaults,memoryIdleSeconds:1,memoryMinTurns:1,memoryStaleSeconds:1};
   session.life.conversation=[{inputs:[{messageId:'one'}]}];session.life.compactions=[{id:'c',sourceId:'c'}];
   for(const name of ['index.md','log.md'])fs.utimesSync(store.safe(name),1,1);

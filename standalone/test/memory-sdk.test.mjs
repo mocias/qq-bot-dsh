@@ -11,10 +11,14 @@ test('installed DSH SDK scopes and refreshes memory context and disposes the ski
   const base=process.env.QQ_RSI_DSH_SDK_ROOT.replace(/\/$/,'');
   const [{Context},{createScope},{SystemPrompt},{SkillRegistry}]=await Promise.all(
     ['cordis','dsh-scope','dsh-system-prompt','dsh-skill'].map(name=>import(base+'/'+name+'/lib/index.js')));
-  const ctx=new Context();new SystemPrompt(ctx,{});new SkillRegistry(ctx,{});
+  const ctx=new Context();await ctx.plugin(SystemPrompt,{});await ctx.plugin(SkillRegistry,{});
   const agent={status:'idle'},other={status:'idle'};
-  const scope=createScope(ctx,agent),otherScope=createScope(ctx,other),listeners=new Map();
-  agent.ctx={systemPrompt:scope.ctx.systemPrompt,skills:scope.ctx.skills,
+  let scope;await ctx.inject(['systemPrompt'],inner=>{scope=createScope(inner,agent);});
+  let otherScope;await ctx.inject(['systemPrompt'],inner=>{otherScope=createScope(inner,other);});
+  const listeners=new Map();
+  assert.throws(()=>scope.ctx.skills,/without inject/);
+  agent.ctx={systemPrompt:scope.ctx.systemPrompt,inject:(...args)=>scope.ctx.inject(...args),
+    get skills(){return scope.ctx.skills;},
     tools:{presentAs:()=>()=>{},register:()=>()=>{}},on:(name,fn)=>{listeners.set(name,fn);return ()=>listeners.delete(name);}};
   agent.followup=agent.steer=message=>listeners.get('agent/inbox/claimed')({message});
   const runtime=new NativeRuntime({agents:{get:id=>id==='memory-test'?agent:null}},x=>x);
@@ -22,7 +26,11 @@ test('installed DSH SDK scopes and refreshes memory context and disposes the ski
     callback:{url:'http://127.0.0.1:12345/tool',token:'a'.repeat(64)},allowed:[],version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID,
     memoryContext:{text:'记忆版本一 {{literal}}',skill:'通过当前聊天工具读写记忆'}};
   try{
-    await runtime.submit(request);
+    assert.equal((await runtime.submit({...request,memoryContext:undefined})).accepted,true);
+    runtime.release({sessionId:'memory-test',runId:'run'});
+    assert.equal((await runtime.submit({...request,memoryContext:{text:'上线人设',skill:''}})).accepted,true);
+    runtime.release({sessionId:'memory-test',runId:'run'});
+    assert.equal((await runtime.submit(request)).accepted,true);
     const initial=await scope.ctx.systemPrompt.assemble({scope:agent,agent});
     assert.equal(initial.contexts.find(x=>x.name==='qq-rsi-memory').text,'记忆版本一 {{literal}}');
     assert.equal(initial.contexts.find(x=>x.name==='qq-rsi-memory').interpolate,false);

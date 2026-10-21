@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import {personaIdentity} from './persona-cards.mjs';
 import {messageSnapshot,validateSubjects,pageAttribution,attributionPattern} from './message-snapshot.mjs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -37,14 +38,15 @@ export function decodeReply(text) {
   return {reply:text,memory:[]};
 }
 export class MemoryStore {
-  constructor(runtime,key) {
+  constructor(runtime,key,personaId) {
     if(!/^\d{5,20}\/(?:private|group)\/\d{5,20}$/.test(key)) throw Error('无效的会话范围');
-    this.key=key;this.dir=path.join(runtime,'memories',scopeOf(key));
+    Object.assign(this,personaIdentity(runtime,key,personaId));
+    this.key=key;this.dir=path.join(runtime,'memories',this.scope);
     this.meta=path.join(this.dir,'.runtime','store.json');
     this.txFile=path.join(this.dir,'.runtime','transaction.json');
     ensureMemoryScaffold(this.dir);
     this.recover();
-    this.state=readJson(this.meta,{version:1,key,receipts:[],completed:0,lastDigest:0});
+    this.state=readJson(this.meta,{version:1,key,personaId:this.personaId,receipts:[],completed:0,lastDigest:0});
     if(this.state.key!==key)throw Error('记忆库范围不匹配');
     if(!fs.existsSync(this.meta))writeJson(this.safe('.runtime/store.json'),this.state);
   }
@@ -58,7 +60,7 @@ export class MemoryStore {
     if(!fs.existsSync(this.txFile))return;
     const tx=readJson(this.txFile);if(tx.key!==this.key||!Array.isArray(tx.files))throw Error('记忆事务格式不正确');
     for(const {name,text} of tx.files){
-      if(!allowedPage.test(name)&&!(tx.kind==='persona'&&['SOUL.md','BOOTSTRAP.md'].includes(name))&&!['index.md','log.md','.runtime/store.json'].includes(name)&&!/^\.runtime\/revisions\/[0-9a-f-]+\.json$/.test(name))throw Error('记忆事务路径不正确');
+      if(!allowedPage.test(name)&&!(tx.kind==='persona'&&['SOUL.md','BOOTSTRAP.md'].includes(name))&&!['index.md','log.md','.runtime/store.json','.runtime/role-state.json'].includes(name)&&!/^\.runtime\/revisions\/[0-9a-f-]+\.json$/.test(name))throw Error('记忆事务路径不正确');
       if(typeof text!=='string')throw Error('记忆事务正文不正确');this.safe(name);
     }
     for(const {name,text} of tx.files){
@@ -80,7 +82,7 @@ export class MemoryStore {
   }
   inspect(){
     this.validateTree();
-    return {engine:'dsh-plugin-memory 0.10.0-qq.6 portable core',key:this.key,
+    return {engine:'dsh-plugin-memory 0.10.0-qq.6 portable core',key:this.key,personaId:this.personaId,personaName:this.personaName,
       insights:collectInsights(this.dir),graph:buildMemoryGraph(this.dir),checkup:runCheckup(this.dir),pages:this.pages(),history:historyStatus(this)};
   }
   context(query,config,{bootFiles,trackAccess=true}={}) {
@@ -89,7 +91,7 @@ export class MemoryStore {
     let boot=renderBootBlock(this.dir,options);
     // Adapt the original single-mode guidance without changing the vendored core.
     boot=boot.replace(/日常后台整理只在收到【空闲记忆整理】任务时执行：[\s\S]*?旧记忆中的数值只代表当时的设置。/,
-      `后台整理只在收到【空闲记忆整理】任务时执行，宿主统一调度：新压缩后${config.memoryConversationIdleEnabled?'、累积'+config.memoryMinTurns+'轮完成对话后':''}${config.memoryStaleEnabled?'、记忆库久未写入时提醒':''}，连续空闲 ${config.memoryIdleSeconds} 秒后处理。用户新消息优先；普通聊天可即时记住有来源的稳定事实，不必等待压缩。${config.rotationEnabled?'轮换仍需累计'+config.rotateAfterCompactions+'次成功压缩并取得记忆保存回执。':'当前自动轮换关闭。'}不要自行启动整理或轮换。`);
+      `后台整理只在收到【空闲记忆整理】任务时执行，宿主统一调度：新压缩后${config.memoryConversationIdleEnabled?'、累积'+config.memoryMinTurns+'轮完成对话后':''}${config.memoryStaleEnabled?'、记忆库久未写入时提醒':''}，连续空闲 ${config.memoryIdleSeconds} 秒后处理。启动时也由宿主先整理未读和未整理记录；整理期间新消息保存排队，成功后继续处理；普通聊天可即时记住有来源的稳定事实，不必等待压缩。${config.rotationEnabled?'轮换仍需累计'+config.rotateAfterCompactions+'次成功压缩并取得记忆保存回执。':'当前自动轮换关闭。'}不要自行启动整理或轮换。`);
     // Keep the on-disk index intact; omit inactive routes from automatic context
     // before capping, so even a partially cut old summary cannot leak back in.
     if((bootFiles??DEFAULT_BOOT_FILES).includes('index.md')){
@@ -117,16 +119,18 @@ export class MemoryStore {
     const id=scopeOf(record.id);const file=path.join(dir,id+'.json');
     if(!fs.existsSync(file))fs.writeFileSync(file,JSON.stringify(record,null,2),{flag:'wx'});
   }
-  commit(updates,{id,evidenceIds,evidenceMessages,summary='',digest=false,maintenance}) {
+  commit(updates,{id,evidenceIds,evidenceMessages,summary='',digest=false,maintenance,roleStateRecord}) {
     this.recover();this.state=readJson(this.meta,this.state);
     if(this.state.receipts.includes(id))return false;
     if(!Array.isArray(updates)||updates.length>12)throw Error('记忆更新数量超限');
     const evidence=new Set(evidenceIds), files=[],before=[];
     // Plan against the original snapshot before any changes or access stamps.
     const maintenancePlan=maintenance?planMaintenance(this,maintenance):null;
+    if(maintenancePlan?.files.some(f=>f.name==='concepts/character-state.md'))throw Error('当前人格状态由角色推演工具维护，不可归档或合并；历史经历可整理');
     for(const patch of updates){
       if(!patch||!allowedPage.test(patch.page)||!['write','forget'].includes(patch.action)||typeof patch.text!=='string'||patch.text.length>20000||!patch.reason?.trim()||patch.reason.length>400)throw Error('记忆更新格式不正确');
       if(this.key.includes('/group/')&&patch.page.startsWith('identity/'))throw Error('群聊不能修改基础身份');
+      if(patch.page==='concepts/character-state.md'&&!roleStateRecord)throw Error('当前人格状态请通过qq_role_state_update更新');
       if(!Array.isArray(patch.evidence)||!patch.evidence.length||patch.evidence.some(x=>!evidence.has(x)))throw Error('记忆更新缺少本次聊天的有效来源');
       const attribution=evidenceMessages?validateSubjects(patch,evidenceMessages,this.key):[];
       if(files.some(x=>x.name===patch.page))throw Error('记忆更新页面重复');
@@ -159,6 +163,7 @@ export class MemoryStore {
     files.push({name:'index.md',text:index},{name:'log.md',text:(fs.existsSync(log)?fs.readFileSync(log,'utf8'):'')+`\n## [${new Date(now).toISOString().slice(0,10)}] ${digest?'digest':'remember'} | ${bound(summary,500)||'无新增或已检查'}\n来源：${JSON.stringify([...evidence])}\n<!-- ${id} -->\n`},
       {name:'.runtime/revisions/'+randomUUID()+'.json',text:JSON.stringify({id,at:now,before:[{page:'index.md',text:fs.readFileSync(this.safe('index.md'),'utf8')},...before],updates,maintenance:maintenancePlan?{expectedRevision:maintenance.expectedRevision,operations:maintenancePlan.changes}:undefined})},
       {name:'.runtime/store.json',text:JSON.stringify(next)});
+    if(roleStateRecord)files.push({name:'.runtime/role-state.json',text:JSON.stringify(roleStateRecord)});
     if(updates.length||maintenance)snapshotHistory(this); // Preserve the pre-migration baseline before the first edit.
     writeJson(this.txFile,{key:this.key,files});this.recover();this.state=next;
     snapshotHistory(this);return true;

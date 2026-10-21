@@ -120,6 +120,7 @@ test('end-to-end OneBot to DSH: dedup, private/group separation, receipts and sa
     if(data.action==='get_login_info'||data.action==='get_status'){socket.send(JSON.stringify({status:'ok',retcode:0,echo:data.echo,data:data.action==='get_login_info'?{user_id:123456}:{online:true,good:true}}));return;}
     sent.push(data);socket.send(JSON.stringify({status:'ok',retcode:0,echo:data.echo,data:{message_id:1000+sent.length}}));});});
   const bridge=new Bridge(runtime);t.after(async()=>{bridge.stop();for(const socket of qq.clients)socket.terminate();await new Promise(resolve=>qq.close(resolve));fs.rmSync(runtime,{recursive:true,force:true});});
+  bridge.startup.begin=()=>{}; // Legacy message protocol fixture; native startup has separate integration coverage.
   const config=validate({dshUrl:mock.url,dshToken:'launch-token',qqUrl:'ws://127.0.0.1:'+qq.address().port,privateUsers:['234567'],groups:['345678'],privatePreset:'private',groupPreset:'safe-group'});
   assert.equal(bridge.status.state,'stopped');assert.equal(sent.length,0);
   await bridge.start(config);const first=event();peer.send(JSON.stringify(first));peer.send(JSON.stringify(first));

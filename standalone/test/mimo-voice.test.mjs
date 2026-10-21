@@ -139,3 +139,11 @@ test('panel voice routes require authentication, redact keys, preserve other con
   const cleared=await (await post('/api/voice/config',{voiceProvider:'local',clearMimoApiKey:true})).json();assert.equal(cleared.config.mimoApiKeyConfigured,false);
   const status=await (await fetch(origin+'/api/status',{headers:{cookie}})).json();assert.equal(status.voice.provider,'local');
 });
+
+
+test('per-message voice emotion reaches MiMo separately from speech and does not mutate persona settings',async t=>{
+  let payload;const voice=service(t,async(url,options)=>{payload=JSON.parse(options.body);return response({audio:{data:wav().toString('base64')}});});
+  const root=path.dirname(voice.dir),media=new Media(root,{voice}),settings={...config,qqVoiceSend:true,voiceReplyMode:'voice',voiceQuietMode:'never',mimoStyle:'平时温柔'};
+  const out=await media.outgoing({reply:'',qq:{voice:'我有点想你了。',voiceStyle:'轻声，略带犹豫，句末停顿'}},{key:'100000001/private/100000002',id:'100000002',group:false},{workspace:root},settings);
+  assert.equal(out.params.message[0].type,'record');assert.equal(payload.messages[0].content,'平时温柔\n轻声，略带犹豫，句末停顿');assert.equal(payload.messages[1].content,'我有点想你了。');assert.equal(settings.mimoStyle,'平时温柔');
+});

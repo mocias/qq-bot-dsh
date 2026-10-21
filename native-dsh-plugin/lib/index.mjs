@@ -7,7 +7,7 @@ import {defineTool} from '@deepseek-ai/dsh-tools';
 // Stable entry point. The manifest is selected by the same release operation
 // as the standalone service, not by requests or model arguments.
 export default class QQRSINative extends TypertRemoteService{
-  static inject=['agents','tools','sessionController','attachments','systemPrompt','skills'];
+  static inject=['agents','tools','sessionController','attachments','systemPrompt','skills','agentPresets'];
   constructor(ctx,config={}){
     super(ctx,'qqRsiNative');this.owner=ctx;this.manifest=config.releaseManifest;
     this.loading=Promise.resolve();this.runtime=null;this.entry=null;
@@ -22,13 +22,14 @@ export default class QQRSINative extends TypertRemoteService{
       if(this.entry===entry)return this.runtime;
       if(this.runtime?.bindings.size)throw Error('QQ原生工具仍有活动回合，暂不能更新插件');
       const mod=await import(pathToFileURL(entry).href);
-      const candidate=new mod.NativeRuntime(this.owner,defineTool);
+      this.runtime?.dispose();this.runtime=null;
+      const candidate=new mod.NativeRuntime(this.owner,defineTool,{scheduleRoot:path.resolve(path.dirname(this.manifest),'../standalone/.runtime')});
       if(candidate.probe().version!==manifest.version||candidate.probe().buildId!==manifest.buildId)throw Error('插件与统一发布清单版本或构建不一致');
-      this.runtime?.dispose();this.runtime=candidate;this.entry=entry;return candidate;
+      this.runtime=candidate;this.entry=entry;return candidate;
     };
     const result=this.loading.then(load);this.loading=result.catch(()=>{});return result;
   }
-  async probe(request){return (await this.current()).probe();}
+  async probe(request){return (await this.current()).probe(request);}
   async submit(request){return (await this.current()).submit(request);}
   async release(request){return this.runtime?.release(request)??{released:true};}
 }

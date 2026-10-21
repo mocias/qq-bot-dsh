@@ -1,17 +1,26 @@
 {
   "name": "dsh-qq-rsi-native",
-  "version": "0.18.0",
+  "version": "0.24.0",
   "description": "QQ RSI 轻量插件：原生执行请求与工具调用，随 QQ RSI 服务统一更新。",
   "private": true,
   "type": "module",
   "main": "lib/index.mjs",
-  "files": ["lib", "package.json", "cordis.patch.yml", "locale"],
+  "files": [
+    "lib",
+    "package.json",
+    "cordis.patch.yml",
+    "locale"
+  ],
   "exports": {
     ".": "./lib/index.mjs",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },
-  "dsh": {"bundle": {"patch": "./cordis.patch.yml"}},
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "peerDependencies": {
     "@deepseek-ai/dsh-tools": "*",
     "@deepseek-ai/dsh-typert-protocol": "*"

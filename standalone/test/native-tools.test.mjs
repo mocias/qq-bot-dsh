@@ -17,6 +17,8 @@ import {MemoryStore} from '../lib/memory.mjs';
 import {DELEGATION_POLICY,DELEGATION_POLICY_VERSION} from '../lib/delegation-policy.mjs';
 import {policyView,resolveChatConfig} from '../lib/chat-policy.mjs';
 import {selectedTools} from '../../native-dsh-plugin/lib/schema.mjs';
+import {PromptProfiles} from '../lib/prompt-profiles.mjs';
+import {ScheduleWakeRouter,wakePaths,readWakeJson} from '../../native-dsh-plugin/lib/scheduled-wake.mjs';
 const defineTool=process.env.QQ_RSI_DSH_TOOLS_ENTRY?(await import(process.env.QQ_RSI_DSH_TOOLS_ENTRY)).defineTool:x=>x;
 
 async function harness(t,respond){
@@ -30,11 +32,18 @@ async function harness(t,respond){
   }},ctx:{
     systemPrompt:{context(value){contexts.set(value.name,value);return ()=>contexts.delete(value.name);}},
     skills:{register(value){skills.set(value.name,value);return ()=>skills.delete(value.name);}},
+    inject(deps,fn){if(deps[0]==='compaction'){fn({compaction:this.compaction});return {dispose(){}};}assert.deepEqual(deps,['skills']);const disposers=[];fn({skills:{register(value){skills.set(value.name,value);const dispose=()=>skills.delete(value.name);disposers.push(dispose);return dispose;}}});return {dispose(){for(const d of disposers)d();}};},
     tools:{presentAs(mode){assert.equal(mode,'native');return ()=>{};},register(def){registered.set(def.name,def);return ()=>registered.delete(def.name);}},
     on(name,fn){listeners.set(name,fn);return ()=>listeners.delete(name);}
   }};
   const runtime=new NativeRuntime({agents:{get:id=>id==='session'?agent:null}},defineTool);
   function emit(type,data){return agent.session.append(type,data,{surfaceOp:['assistant/message','user/message','tool/result'].includes(type)?'append':undefined});}
+  agent.ctx.compaction={async compactRegion(start,end,target,signal){
+    signal?.throwIfAborted();const compactionId='compact-'+seq,summary=[{type:'text',text:'甲喜欢茶，已经回复完成；尚待用户补充地址。'}];
+    emit('compaction/start',{compactionId});emit('compaction/summary',{compactionId,summary});
+    emit('user/message',{id:'checkpoint-'+seq,role:'user',source:{kind:'compact-checkpoint',compactionId},content:summary});
+    emit('compaction/end',{compactionId});return {compactionId,summary,startSeq:start,endSeq:end};
+  }};
   agent.followup=message=>{
     messages.push(message);agent.status='running';turn++;
     emit('turn/start',{turn});listeners.get('agent/inbox/claimed')?.({message,turn});emit('user/message',message);
@@ -53,6 +62,7 @@ async function harness(t,respond){
     });
   };
   agent.steer=message=>{messages.push(message);listeners.get('agent/inbox/claimed')?.({message,turn});emit('user/message',message);};
+  agent.cancel=()=>{agent.status='idle';emit('turn/end',{turn,reason:{kind:'cancelled'}});};
   const server=http.createServer(async(req,res)=>{
     if(req.url.startsWith('/?token=')){res.writeHead(302,{'Set-Cookie':'dsh-auth-test=ok'});res.end();return;}
     let body='';for await(const chunk of req)body+=chunk;
@@ -75,7 +85,7 @@ async function harness(t,respond){
   const config={...defaults,dshNativeTools:true,dshToken:'test',privatePreset:'test',groupPreset:'test',qqVoiceSend:false,qqImages:true,dshUrl:`http://127.0.0.1:${server.address().port}`};
   const client=new DshClient(config);
   t.after(async()=>{client.close();runtime.dispose();for(const socket of ws.clients)socket.terminate();ws.close();await new Promise(r=>server.close(r));});
-  return {config,client,runtime,registered,requests,messages,agent,listeners,contexts,skills};
+  return {config,client,runtime,registered,requests,messages,agent,listeners,contexts,skills,emit,disconnect:()=>peer.terminate()};
 }
 function bridgeFixture(t,config,client,{group=false}={}){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'qq-native-'));
@@ -122,11 +132,11 @@ for(const group of [false,true])test(`native ${group?'group':'private'} memory s
   assert.equal(h.contexts.size,0);assert.equal(h.skills.size,0);
 });
 
-test('native memory context refreshes next turn without duplicate documents in execution requests',async t=>{
+test('native persona enters first conversation and explicit updates while runtime context stays current',async t=>{
   let round=0;
   const h=await harness(t,async({contexts,agent,message})=>{
     round++;assert.match(contexts.get('qq-rsi-memory').text({agent}),round===1?/初始人格/:/更新人格/);
-    assert.doesNotMatch(message.content[0].text,/初始人格|更新人格/);return '回复';
+    assert.match(message.content[0].text,round===1?/初始人格/:/更新人格/);return '回复';
   });
   const f=bridgeFixture(t,h.config,h.client),store=f.bridge.memory(f.route.key);
   fs.writeFileSync(store.safe('SOUL.md'),'初始人格');await f.bridge.handle(f.route,0);
@@ -138,7 +148,7 @@ for(const group of [false,true])test(`native ${group?'group':'private'} persona 
   const h=await harness(t,async({call,contexts,agent,registered})=>{
     assert.equal(registered.has('qq_memory_update'),false);
     const current=(await call('qq_persona_read',{},'read-persona')).result;
-    assert.deepEqual(current.eligibleSources,[{sourceId:'m1',speakerQQ:'100000002'}]);
+    assert.deepEqual(current.eligibleSources,[{sourceId:'M1',speakerQQ:'U1'}]);
     const args={text:'# SOUL\n名字：小雨\n风格：简短',expectedRevision:current.revision,bootstrap:'---\nstatus: in_progress\n---\n- [x] 名字',expectedBootstrapRevision:current.bootstrapRevision,reason:'当前对方指定',evidence:['m1']};
     const saved=await call('qq_persona_update',args,'save-persona');assert.equal(saved.result.saved,true);assert.equal(saved.memoryContext,undefined);
     assert.match(contexts.get('qq-rsi-memory').text({agent}),/名字：小雨/);
@@ -158,7 +168,7 @@ test('native memory disabled omits all memory tools and missing context service 
   });
   const f=bridgeFixture(t,{...h.config,memoryEnabled:false},h.client);await f.bridge.handle(f.route,0);
   delete h.agent.ctx.systemPrompt;
-  await assert.rejects(h.client.prompt('session','不应提交',{nativeTools:{allowed:[],execute:async()=>{},memoryContext:()=>({text:'',skill:''})}}),/未接受/);
+  await assert.rejects(h.client.prompt('session','不应提交',{nativeTools:{allowed:[],execute:async()=>{},memoryContext:()=>({text:'',skill:''})}}),/提交被拒绝.*上下文服务/);
   assert.equal(h.messages.length,1);assert.equal(h.runtime.bindings.size,0);
 });
 test('native DSH request saves memory and sends messages using tools without the JSON loop',async t=>{
@@ -388,10 +398,37 @@ test('continuous cancellation wakes a waiting tool and releases the QQ scope',as
   await assert.rejects(run);assert.equal(f.sent.length,0);assert.equal(h.runtime.bindings.size,0);
 });
 
-test('continuous lifetime expiry releases parent scope even when a child never completes',async t=>{
+test('continuous parent ignores total duration deadlines and retains tools until explicit stop',async t=>{
   const h=await harness(t,async({emit})=>{emit('subagent/catalog',{version:2,childId:'unfinished',mode:'external'});return '';});
-  await assert.rejects(h.client.prompt('session','bounded window',{timeoutMs:100,nativeTools:{continuous:true,allowed:[],execute:async()=>({})}}),error=>error.cancelled===true);
+  const controller=new AbortController();let settled=false;
+  const run=h.client.prompt('session','unlimited conversation',{timeoutMs:10,signal:controller.signal,nativeTools:{continuous:true,allowed:[],execute:async()=>({})}});
+  run.then(()=>settled=true,()=>settled=true);
+  await new Promise(resolve=>setTimeout(resolve,100));
+  assert.equal(settled,false);assert.equal(h.runtime.bindings.size,1);
+  controller.abort();await assert.rejects(run,error=>error.cancelled===true);
   assert.equal(h.runtime.bindings.size,0);assert.equal(h.client.runs.size,0);
+});
+
+test('large initial context and long continuous exchanges do not exhaust message, send or callback counters',async t=>{
+  let f;
+  const h=await harness(t,async({call})=>{
+    assert.ok(JSON.stringify(f.bridge.jobs.get(f.route.key).inputs[0].compactView).length>12000);
+    for(let i=2;i<=13;i++){
+      await f.bridge.accept({...f.route,messageId:'m'+i,qqMessageId:String(i),text:'接着说'+i},0);
+      const value=(await call('qq_wait_for_messages',{timeoutSeconds:1},'wait-'+i)).result;
+      assert.equal(value.reason,'messages');assert.match(JSON.stringify(value.messages),new RegExp('接着说'+i));
+    }
+    for(let i=0;i<33;i++)assert.equal((await call('qq_send_message',{messages:['有新内容'+i]},'send-'+i)).result.sent,true);
+    for(let i=0;i<130;i++)await call('qq_get_recent_messages',{limit:1},'read-'+i);
+    return '';
+  });
+  f=bridgeFixture(t,h.config,h.client);
+  // These are temporary fixture records, not real QQ history.
+  for(let i=0;i<40;i++)f.bridge.inbox(f.route.key).append({sourceId:'history'+i,messageId:'history'+i,sender:'100000002',text:'背景'.repeat(200)});
+  f.bridge.chatWindow(f.route.key).sync(f.bridge.inbox(f.route.key).read().messages);
+  f.bridge.chatWindow(f.route.key).data.summary=[{text:'更早的发言摘录'.repeat(1000)}];
+  await f.bridge.handle(f.route,0);
+  assert.equal(f.sent.length,33);assert.equal(f.bridge.state.retired.length,0);assert.equal(f.session.id,'session');
 });
 function audioBytes(){
   const b=Buffer.alloc(364);b.write('RIFF');b.writeUInt32LE(356,4);b.write('WAVEfmt ',8);b.writeUInt32LE(16,16);b.writeUInt16LE(1,20);b.writeUInt16LE(1,22);b.writeUInt32LE(16000,24);b.writeUInt32LE(32000,28);b.writeUInt16LE(2,32);b.writeUInt16LE(16,34);b.write('data',36);b.writeUInt32LE(320,40);return b;
@@ -412,9 +449,9 @@ test('quoted voice uses two real outbox plans and DSH receipt contains the exact
   assert.match(currentResults(h.agent).join('\n'),/"state":"sent"[\s\S]*语音回复：[\s\S]*"state":"sent"[\s\S]*这是实际朗读的原句。/);
   assert.equal(h.agent.session.log.some(e=>e.type==='assistant/message'),true);
 });
-test('explicit silence concludes the turn; fallback markers do not become text or voice',async t=>{
+test('background silence concludes the turn; fallback markers do not become text or voice',async t=>{
   const h=await harness(t,async({call})=>{await call('qq_no_reply',{});return '（无回复）';});
-  const f=bridgeFixture(t,h.config,h.client);await f.bridge.handle(f.route,0);
+  const f=bridgeFixture(t,h.config,h.client);await f.bridge.handle({...f.route,trigger:'background',expectedVersion:f.session.life.version},0);
   assert.equal(f.sent.length,0);assert.equal(h.agent.session.log.some(e=>e.type==='assistant/message'),false);
   const h2=await harness(t,()=>['（无回复）',' ( 无需回复 ) ','[[QQ_SILENT]]']);
   const f2=bridgeFixture(t,{...h2.config,qqVoiceSend:true,voiceReplyMode:'voice',voiceQuietMode:'never'},h2.client);
@@ -430,14 +467,14 @@ test('silence detection preserves real prose and blocks placeholder send tools',
   const f=bridgeFixture(t,h.config,h.client);await f.bridge.handle(f.route,0);
   assert.deepEqual(text(f.sent),['你看到的“（无回复）”是占位文字。']);
 });
-test('no-reply ends the speaking phase without erasing messages already delivered',async t=>{
+test('waiting keeps the speaking phase without erasing messages already delivered',async t=>{
   const h=await harness(t,async({call})=>{
     await call('qq_send_message',{messages:['保留原句']},'a');
-    await call('qq_no_reply',{},'b');return '额外正文';
+    await call('qq_wait_for_messages',{timeoutSeconds:1},'b');return '额外正文';
   });
   const f=bridgeFixture(t,h.config,h.client);await f.bridge.handle(f.route,0);
   assert.deepEqual(text(f.sent),['保留原句']);
-  assert.equal(h.agent.session.log.some(e=>e.type==='assistant/message'),false);
+  assert.equal(h.agent.session.log.some(e=>e.type==='assistant/message'),true);
 });
 test('partial and unknown delivery receipts never claim success or resend messages',async t=>{
   const h=await harness(t,async({call})=>{
@@ -490,7 +527,7 @@ test('native callbacks reject wrong token, cross-session, arbitrary tool and lat
 });
 test('plugin rejects version mismatch before submitting and never falls back to prompt',async t=>{
   const h=await harness(t,()=>''),callback={url:'http://127.0.0.1:1234/tool',token:'a'.repeat(64)};
-  await assert.rejects(h.runtime.submit({sessionId:'session',runId:'r',requestId:'m',mode:'queue',content:[{type:'text',text:'x'}],callback,allowed:[],version:'0.15.0',protocol:PROTOCOL}),/版本/);
+  assert.match((await h.runtime.submit({sessionId:'session',runId:'r',requestId:'m',mode:'queue',content:[{type:'text',text:'x'}],callback,allowed:[],version:'0.15.0',protocol:PROTOCOL})).error.message,/版本/);
   assert.equal(h.messages.length,0);
   h.client.rpc=async method=>{assert.equal(method,'qqRsiNative/probe');return {version:'old',protocol:PROTOCOL};};
   await assert.rejects(h.client.probe(),/版本/);
@@ -529,7 +566,7 @@ test('existing native conversation receives delegation policy once and only pare
     await call('qq_send_message',{messages:['主智能体选择的答复'+turn]},'answer');return '内部说明';
   });
   const f=bridgeFixture(t,h.config,h.client);
-  f.session.promptVersion=2;f.session.replyPolicyVersion=1;
+  f.session.windowVersion=1;f.session.promptVersion=2;f.session.replyPolicyVersion=1;
   await f.bridge.handle(f.route,0);
   assert.equal(f.session.delegationPolicyVersion,DELEGATION_POLICY_VERSION);
   await f.bridge.handle({...f.route,messageId:'m2',qqMessageId:'2',text:'继续'},0);
@@ -562,18 +599,335 @@ test('native cancellation waits for turn acknowledgement and releases scoped too
   await assert.rejects(answer,error=>error.cancelled&&error.acknowledged);
   assert.equal(h.registered.size,0);assert.equal(h.runtime.bindings.size,0);
 });
+
+test('lifecycle-bound maintenance survives the old total deadline and can still commit',async t=>{
+  let ready,finish;const started=new Promise(r=>ready=r);let saved=0;
+  const h=await harness(t,async({call})=>{ready();await new Promise(r=>finish=r);await call('qq_memory_digest',{summary:'done',updates:[]});return '';});
+  const answer=h.client.prompt('session','long digest',{lifecycleBound:true,timeoutMs:20,nativeTools:{allowed:['qq_memory_digest'],execute:async()=>{saved++;return {result:{saved:true}};}}});answer.catch(()=>{});
+  await started;await new Promise(r=>setTimeout(r,50));assert.equal(h.registered.size,1);finish();await answer;
+  assert.equal(saved,1);assert.equal(h.registered.size,0);
+});
+
+test('real client heartbeats renew tools past 180 and 240 seconds during model retries',async t=>{
+  let ready,finish;const started=new Promise(r=>ready=r);
+  const h=await harness(t,async({call})=>{ready();await new Promise(r=>finish=r);await call('qq_memory_digest',{summary:'done',updates:[]});return '';});
+  t.mock.timers.enable({apis:['Date','setTimeout','setInterval'],now:1000000});
+  const answer=h.client.prompt('session','long digest',{lifecycleBound:true,nativeTools:{allowed:['qq_memory_digest'],execute:async()=>({result:{saved:true}})}});answer.catch(()=>{});
+  await started;
+  for(let i=0;i<200&&!h.requests.some(r=>r.method==='qqRsiNative/submit');i++)await new Promise(r=>setImmediate(r));
+  // Drain the submit response before advancing the injected clock.
+  for(let i=0;i<30;i++)await new Promise(r=>setImmediate(r));
+  for(let n=0;n<12;n++){
+    t.mock.timers.tick(30000);
+    for(let i=0;i<500&&h.runtime.bindings.get('session')?.expires!==Date.now()+240000;i++)await new Promise(r=>setImmediate(r));
+    assert.equal(h.runtime.bindings.get('session')?.expires,Date.now()+240000);assert.equal(h.registered.size,1);
+    for(let i=0;i<15;i++)await new Promise(r=>setImmediate(r));
+  }
+  assert.equal(h.requests.filter(r=>r.method==='qqRsiNative/release'&&r.payload.args.request.action==='renew').length,12);
+  finish();await answer;assert.equal(h.registered.size,0);
+});
+
+test('cancellation revokes writes but waits for acknowledgement before disposing tool names',async t=>{
+  let ready,cancelled=false;const started=new Promise(r=>ready=r);
+  const h=await harness(t,async()=>{ready();return new Promise(()=>{});});h.agent.cancel=()=>{cancelled=true;};
+  const controller=new AbortController();let ended=false;
+  const answer=h.client.prompt('session','digest',{signal:controller.signal,lifecycleBound:true,nativeTools:{allowed:['qq_memory_digest'],execute:()=>assert.fail('no late write')}});
+  answer.catch(()=>{ended=true;});await started;controller.abort();
+  for(let i=0;i<500&&!cancelled;i++)await new Promise(r=>setImmediate(r));
+  assert.equal(cancelled,true);assert.equal(ended,false);assert.equal(h.registered.size,1);
+  await assert.rejects(h.registered.get('qq_memory_digest').execute({}, {agent:h.agent,signal:new AbortController().signal}),/失效/);
+  h.agent.status='idle';h.emit('turn/end',{turn:1,reason:'cancelled'});
+  await assert.rejects(answer,e=>e.cancelled&&e.acknowledged&&!e.exitUnconfirmed);assert.equal(h.registered.size,0);
+});
+
+test('stream loss with unconfirmed cancellation retains names, blocks replacement and can confirm a later end',async t=>{
+  let ready,cancels=0;const started=new Promise(r=>ready=r);
+  const h=await harness(t,async()=>{ready();return new Promise(()=>{});});h.agent.cancel=()=>{cancels++;};
+  const answer=h.client.prompt('session','digest',{lifecycleBound:true,cancelTimeoutMs:20,nativeTools:{allowed:['qq_memory_digest'],execute:()=>assert.fail('no late write')}});answer.catch(()=>{});
+  await started;h.disconnect();let failure;
+  await assert.rejects(answer,e=>{failure=e;return !!e.exitUnconfirmed&&!e.acknowledged;});
+  assert.equal(cancels,1);assert.equal(h.registered.size,1);assert.equal(await h.client.confirmExit('session',failure.exitUnconfirmed),false);
+  const f=bridgeFixture(t,h.config,h.client);f.session.exitUnconfirmed=failure.exitUnconfirmed;f.session.blocked=true;f.bridge.persist();
+  await assert.rejects(f.bridge.ensureStartupSession(f.route),/结束状态未确认/);
+  assert.equal(h.requests.some(r=>r.method==='session/create'),false);
+  h.agent.status='idle';h.emit('turn/end',{turn:1,reason:'cancelled'});assert.equal(h.registered.size,0);
+  await f.bridge.confirmSessionExit(f.session);assert.equal(f.session.exitUnconfirmed,undefined);
+});
+
+test('explicit stop followed by stream close preserves confirmed cancellation',async t=>{
+  let ready,cancelled=false;const started=new Promise(r=>ready=r);
+  const h=await harness(t,async()=>{ready();return new Promise(()=>{});});
+  h.agent.cancel=()=>{cancelled=true;};
+  const controller=new AbortController();
+  const answer=h.client.prompt('session','chat',{signal:controller.signal,cancelTimeoutMs:2000,nativeTools:{continuous:true,allowed:[],execute:()=>{}}});
+  answer.catch(()=>{});await started;controller.abort();h.client.close();
+  for(let i=0;i<500&&!cancelled;i++)await new Promise(r=>setImmediate(r));
+  assert.equal(cancelled,true);
+  h.agent.status='idle';h.emit('turn/end',{turn:1,reason:'cancelled'});
+  await assert.rejects(answer,e=>e.cancelled===true&&e.acknowledged===true&&!e.exitUnconfirmed);
+  assert.equal(h.runtime.bindings.size,0);
+});
 test('same version but different build is rejected before input submission',async t=>{
   const h=await harness(t,()=>''),callback={url:'http://127.0.0.1:1234/tool',token:'a'.repeat(64)};
-  await assert.rejects(h.runtime.submit({sessionId:'session',runId:'r',requestId:'m',mode:'queue',content:[{type:'text',text:'x'}],callback,allowed:[],version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID+'-other'}),/构建/);
+  assert.match((await h.runtime.submit({sessionId:'session',runId:'r',requestId:'m',mode:'queue',content:[{type:'text',text:'x'}],callback,allowed:[],version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID+'-other'})).error.message,/构建/);
   assert.equal(h.messages.length,0);
 });
 test('native tool authority is lost if an unrelated local user input claims the agent',async t=>{
   let executed=false;
   const h=await harness(t,async({call,agent})=>{
     h.listeners.get('agent/inbox/claimed')({message:{source:{kind:'user'}},turn:1});
+    h.listeners.get('agent/inbox/claimed')({message:{source:{kind:'repeat-tool-reminder',form:'notice'}},turn:1});
     await assert.rejects(call('qq_memory_update',{updates:[]}),/有效的QQ/);
     return '结束';
   });
   await h.client.prompt('session','QQ输入',{nativeTools:{allowed:['qq_memory_update'],execute:async()=>{executed=true;return {};}}});
   assert.equal(executed,false);
+});
+
+test('pre-dispatch rejection retains direct input and does not block the session or cancel other work',async t=>{
+  const h=await harness(t,()=>assert.fail('model must not start'));
+  h.agent.ctx.inject=()=>{throw Error('skills dependency unavailable');};
+  const f=bridgeFixture(t,h.config,h.client);
+  await assert.rejects(f.bridge.handle(f.route,0),e=>e.notSubmitted===true&&/skills dependency/.test(e.message));
+  assert.equal(h.messages.length,0);assert.equal(h.runtime.bindings.size,0);
+  assert.equal(f.session.blocked,false);assert.equal(f.session.exitUnconfirmed,undefined);
+  const row=f.bridge.state.maintenanceInbox[f.route.key][0];
+  assert.equal(row.state,'pending');assert.match(row.rejected,/skills dependency/);
+  assert.equal(h.requests.some(r=>r.method==='qqRsiNative/release'),false);
+});
+
+test('failure after dispatch remains uncertain rather than safe to replay',async t=>{
+  const h=await harness(t,()=>''),callback={url:'http://127.0.0.1:1234/tool',token:'a'.repeat(64)};
+  h.agent.followup=()=>{throw Error('failure after crossing dispatch boundary');};
+  await assert.rejects(h.runtime.submit({sessionId:'session',runId:'r',requestId:'m',mode:'queue',content:[{type:'text',text:'x'}],callback,allowed:[],version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID}),/dispatch boundary/);
+});
+
+test('continuous chat accepts host context projections but still rejects unrelated user input',async t=>{
+  const h=await harness(t,async({emit,call})=>{
+    for(const kind of ['runtime-context','skill-catalog','time-context']){
+      const message={id:kind,role:'user',source:{kind},content:[{type:'text',text:'host context'}]};
+      h.listeners.get('agent/inbox/claimed')({message,turn:1});
+      emit('user/message',message);
+    }
+    await call('qq_send_message',{messages:['已接收']},'sent');return 'private reasoning';
+  });
+  const f=bridgeFixture(t,h.config,h.client);
+  await f.bridge.handle(f.route,0);assert.deepEqual(text(f.sent),['已接收']);assert.equal(f.session.blocked,false);
+  const other=await harness(t,async({emit})=>{emit('user/message',{id:'external',role:'user',source:{kind:'user'},content:[{type:'text',text:'external input'}]});await new Promise(r=>setTimeout(r,20));return '';});
+  await assert.rejects(other.client.prompt('session','chat',{nativeTools:{continuous:true,allowed:[],execute:async()=>{}}}),/其他来源输入/);
+});
+
+test('DSH repeated-tool reminder after waiting is host context, not a new user interruption',async t=>{
+  const h=await harness(t,async({emit,call})=>{
+    await call('qq_wait_for_messages',{timeoutSeconds:1},'silent');
+    for(let i=0;i<6;i++){
+      const message={id:'repeat-'+i,role:'user',source:{kind:'repeat-tool-reminder',form:'notice',summary:'qq_wait_for_messages × 3'},content:[{type:'text',text:'Host repeated-tool reminder'}]};
+      h.listeners.get('agent/inbox/claimed')({message,turn:1});
+      emit('user/message',message);
+      await call('qq_wait_for_messages',{timeoutSeconds:1},'wait-'+i);
+    }
+    await call('qq_send_message',{messages:['仍在等待后正常接话']},'after-reminders');
+    return '';
+  });
+  const f=bridgeFixture(t,h.config,h.client);
+  await f.bridge.handle(f.route,0);assert.equal(f.session.blocked,false);assert.deepEqual(text(f.sent),['仍在等待后正常接话']);
+  assert.equal(h.messages.length,1,'reminders must not restart the QQ binding');
+});
+
+test('turn-stopping continuation stays inside the existing QQ turn and stops when cancelled or unclaimed',async t=>{
+ let callbacks=0;
+ const h=await harness(t,async({call,agent})=>{
+   const hook=h.listeners.get('agent/turn-stopping');assert.equal(typeof hook,'function');
+   for(let i=0;i<3;i++){
+     await hook({signal:new AbortController().signal,turn:1});
+     await call('qq_wait_for_messages',{},'continued-'+i);
+   }
+   assert.equal(agent.session.log.filter(e=>e.type==='turn/start').length,1);
+   const before=h.messages.length,controller=new AbortController();controller.abort();
+   await hook({signal:controller.signal});assert.equal(h.messages.length,before);
+   h.listeners.get('agent/inbox/claimed')({message:{source:{kind:'user'}}});
+   await hook({signal:new AbortController().signal});assert.equal(h.messages.length,before);
+   return '';
+ });
+ await h.client.prompt('session','chat',{nativeTools:{continuous:true,allowed:['qq_wait_for_messages'],execute:async()=>{callbacks++;return {result:{reason:'timeout'}};}}});
+ assert.equal(callbacks,3);assert.equal(h.messages.length,4);
+ assert.ok(h.messages.slice(1).every(m=>m.source.continuation===true));
+});
+
+for(const group of [false,true])test(`native ${group?'group':'private'} unsent DSH reply is corrected before waiting and sent exactly once`,async t=>{
+ let f,checked=false;
+ const h=await harness(t,async({call,emit,turn,agent})=>{
+   const say=()=>emit('assistant/message',{turn,message:{id:'draft',content:[{type:'text',text:'练完记得拉伸。'}]}});
+   say();await h.listeners.get('agent/turn-stopping')({signal:new AbortController().signal,turn});
+   assert.match(h.messages.at(-1).content[0].text,/尚未发送到QQ/);
+   assert.deepEqual(text(f.sent),[],'ordinary text must not be forwarded');
+   const blocked=await call('qq_wait_for_messages',{timeoutSeconds:1},'blocked');
+   assert.equal(blocked.result.reason,'reply-not-sent');
+   assert.equal(blocked.result.messages.length,0);
+   await call('qq_send_message',{messages:['练完记得拉伸。']},'corrected');
+   assert.deepEqual(text(f.sent),['练完记得拉伸。']);
+   // A separate internal summary must be discarded explicitly, never auto-published.
+   say();await h.listeners.get('agent/turn-stopping')({signal:new AbortController().signal,turn});
+   assert.equal((await call('qq_wait_for_messages',{},'still-blocked')).result.reason,'reply-not-sent');
+   const waiting=await call('qq_wait_for_messages',{discardDraft:true,timeoutSeconds:1},'discard');
+   assert.notEqual(waiting.result.reason,'reply-not-sent');
+   assert.equal(agent.session.log.filter(e=>e.type==='turn/start').length,1);
+   checked=true;return '';
+ });
+ f=bridgeFixture(t,h.config,h.client,{group});await f.bridge.handle(f.route,0);
+ assert.equal(checked,true);assert.deepEqual(text(f.sent),['练完记得拉伸。']);
+});
+
+test('reply correction preserves rejected drafts, resolves uncertain receipts without retry and ignores tool commentary',async t=>{
+ let waits=0,sends=0,checked=false;
+ const h=await harness(t,async({call,emit,turn})=>{
+   const stop=()=>h.listeners.get('agent/turn-stopping')({signal:new AbortController().signal,turn});
+   const say=()=>emit('assistant/message',{turn,message:{content:[{type:'text',text:'待处理正文'}]}});
+   say();await stop();
+   await assert.rejects(call('qq_send_message',{messages:[]},'invalid'),/invalid draft/);
+   assert.equal((await call('qq_wait_for_messages',{},'blocked')).result.reason,'reply-not-sent');
+   await call('qq_send_message',{messages:['回复']},'unknown');
+   await stop();await call('qq_wait_for_messages',{},'after-unknown');
+   // Text followed by a tool call is commentary, not a text-only final reply.
+   say();emit('tool/call',{name:'qq_wait_for_messages',callId:'commentary-wait'});
+   await call('qq_wait_for_messages',{},'commentary-wait');await stop();
+   assert.doesNotMatch(h.messages.at(-1).content[0].text,/尚未发送到QQ/);
+   emit('assistant/message',{turn,message:{content:[{type:'thinking',text:'private reasoning'}]}});await stop();
+   assert.doesNotMatch(h.messages.at(-1).content[0].text,/尚未发送到QQ/);
+   checked=true;return '';
+ });
+ await h.client.prompt('session','chat',{nativeTools:{continuous:true,allowed:['qq_wait_for_messages','qq_send_message'],execute:async(name,args)=>{
+   if(name==='qq_wait_for_messages'){waits++;assert.equal('discardDraft' in args,false);return {result:{reason:'timeout'}};}
+   sends++;if(!args.messages.length)throw Error('invalid draft');return {result:{sent:false,messages:[{state:'unknown',text:'回复'}]}};
+ }}});
+ assert.equal(checked,true);assert.equal(sends,2);assert.equal(waits,2);
+});
+
+test('saved persona prompt profile reaches actual native submit, sending descriptions and continuation hook',async t=>{
+ let f,checked=false;
+ const h=await harness(t,async({call,message,registered,emit,turn})=>{
+   const input=message.content.filter(p=>p.type==='text').map(p=>p.text).join('\n');
+   assert.match(input,/persona-style-marker/);assert.match(input,/等待规则已调整/);
+   assert.match(registered.get('qq_send_message').description,/send-marker/);
+   emit('assistant/message',{turn,message:{content:[{type:'text',text:'待发送的正文'}]}});
+   await h.listeners.get('agent/turn-stopping')({signal:new AbortController().signal,turn});
+   assert.match(h.messages.at(-1).content[0].text,/unsent-marker/);
+   assert.match(h.messages.at(-1).content[0].text,/continue-marker/);
+   assert.match((await call('qq_wait_for_messages',{},'guard')).result.instruction,/unsent-marker/);
+   await call('qq_send_message',{messages:['实际回复']},'reply');checked=true;return '';
+ });
+ f=bridgeFixture(t,h.config,h.client);
+ const profiles=new PromptProfiles(f.root);profiles.save({revision:0,overrides:{'chat.style':'global-style-marker'}});
+ profiles.save({key:f.route.key,personaId:'default',revision:1,overrides:{'chat.style':'persona-style-marker','chat.continuous':'等待规则已调整','tool.qq_send_message':'send-marker','runtime.unsent':'unsent-marker','runtime.3':'continue-marker'}});
+ await f.bridge.handle(f.route,0);assert.equal(checked,true);assert.deepEqual(text(f.sent),['实际回复']);
+ assert.equal(h.requests.find(r=>r.method==='qqRsiNative/submit').payload.args.request.promptRules['chat.style'],'persona-style-marker');
+});
+
+test('a restored durable queue feeds the ongoing wait, and later arrivals wake the same DSH turn',async t=>{
+  let f;
+  const h=await harness(t,async({call})=>{
+    const backlog=(await call('qq_wait_for_messages',{timeoutSeconds:1},'backlog')).result;
+    assert.equal(backlog.reason,'messages');assert.match(JSON.stringify(backlog.messages),/已有补充/);
+    const waiting=call('qq_wait_for_messages',{timeoutSeconds:300},'live');
+    for(let i=0;i<200&&!f.bridge.jobs.get(f.route.key).conversationInbox.wake;i++)await new Promise(r=>setTimeout(r,5));
+    f.bridge.receive({post_type:'message',message_type:'private',self_id:'100000001',user_id:'100000002',message_id:'3',message:[{type:'text',data:{text:'等待期间新到的内容'}}]},0);
+    const latest=(await waiting).result;assert.equal(latest.reason,'messages');assert.match(JSON.stringify(latest.messages),/等待期间新到的内容/);
+    return ''; // A model may end naturally; queued records must still be committed.
+  });
+  f=bridgeFixture(t,h.config,h.client);Object.assign(f.bridge.config,{botQQ:'100000001',privateUsers:['100000002']});
+  f.bridge.deferForMaintenance({...f.route,epoch:0});
+  f.bridge.deferForMaintenance({...f.route,messageId:'m2',qqMessageId:'2',text:'已有补充',epoch:0});
+  await f.bridge.drainDeferred(f.route.key,0);
+  assert.equal(f.bridge.status.lastError,'');assert.equal(f.bridge.hasDeferred(f.route.key),false);
+  assert.equal(h.messages.length,1);assert.equal(f.session.id,'session');
+  assert.equal(f.bridge.state.maintenanceInbox[f.route.key].filter(r=>r.state==='processed').length,2);
+});
+
+for(const group of [false,true])test(`native ${group?'group':'private'} compression hands off before next wait without changing session or losing queued input`,async t=>{
+  let f;
+  const h=await harness(t,async({call,agent,emit,contexts})=>{
+    emit('tool/call',{name:'qq_send_message',callId:'actual-send',args:{messages:['已收到']}});
+    await call('qq_send_message',{messages:['已收到']},'actual-send');
+    const queued={...f.route,messageId:'m-next',qqMessageId:'next',text:'这是新地址'};
+    f.bridge.jobs.get(f.route.key).conversationInbox.push(queued);
+    emit('assistant/message',{turn:1,message:{content:[{type:'text',text:'尚未投递的新回复'}]}});
+    await h.listeners.get('agent/turn-stopping')({signal:new AbortController().signal,turn:1});
+    const result=await agent.ctx.compaction.compactRegion(0,agent.session.log.at(-1).seq,agent,new AbortController().signal);
+    assert.ok(result.compactionId);assert.equal(f.session.id,'session');
+    assert.match(contexts.get('qq-rsi-handoff').text({agent}),/交接恢复待办/);
+    await assert.rejects(call('qq_send_message',{messages:['不应提前发送']},'early'),/先调用/);
+    const restored=(await call('qq_wait_for_messages',{},'restore')).result;
+    assert.equal(restored.reason,'handoff');assert.equal(restored.handoff.chat.type,group?'group':'private');assert.equal(restored.messages.length,0);
+    assert.match(restored.handoff.text,/尚待用户补充地址/);
+    assert.equal((await call('qq_wait_for_messages',{},'draft-after-restore')).result.reason,'reply-not-sent','handoff must not lose the routing decision');
+    const events=(await call('qq_handoff',{action:'read',id:restored.handoff.id,section:'events'},'archive')).result;
+    assert.match(events.text,/actual-send/);assert.match(events.text,/已收到/);
+    const next=(await call('qq_wait_for_messages',{discardDraft:true,timeoutSeconds:1},'next')).result;
+    assert.equal(next.reason,'messages');assert.match(JSON.stringify(next),/这是新地址/);
+    const manual=(await call('qq_handoff',{action:'create',summary:'已收到地址，等待确认',unfinished:['核对地址']},'manual')).result;
+    assert.equal(manual.saved,true);
+    assert.equal((await call('qq_wait_for_messages',{},'manual-restore')).result.reason,'handoff');
+    return '';
+  });
+  f=bridgeFixture(t,h.config,h.client,{group});await f.bridge.handle(f.route,0);
+  assert.deepEqual(text(f.sent),['已收到']);assert.equal(f.session.id,'session');assert.equal(h.runtime.bindings.size,0);
+  assert.equal(h.contexts.size,0);
+});
+
+
+test('absence saves handoff, digests without sending, sleeps and restores persona plus handoff in the same session',async t=>{
+  let f,phase=0,clock=100000;
+  const h=await harness(t,async({call,message,registered,contexts,agent})=>{
+    phase++;
+    if(phase===1){
+      assert.match(message.content[0].text,/schedule_create/);assert.match(message.content[0].text,/voiceStyle/);assert.match(message.content[0].text,/reason=user-away/);
+      await call('qq_send_message',{messages:['收到']},'reply');clock+=1800001;
+      const away=await call('qq_wait_for_messages',{timeoutSeconds:1},'away');assert.equal(away.result.reason,'user-away');
+      await assert.rejects(call('qq_send_message',{messages:['不应发送']},'late'),/交接|整理/);
+      const saved=await call('qq_handoff',{action:'create',summary:'用户刚才提到喜欢茶，已回复收到，等下次接话。',unfinished:['下次自然聊茶']},'handoff');assert.equal(saved.result.saved,true);return '';
+    }
+    if(phase===2){
+      assert.ok(registered.has('qq_memory_digest'));assert.ok(!registered.has('qq_send_message'));
+      await call('qq_memory_digest',{summary:'无新增稳定事实',updates:[]},'digest');return '';
+    }
+    assert.match(message.content[0].text,/同一个QQ会话的恢复输入/);assert.match(message.content[0].text,/下次自然聊茶/);assert.match(message.content[0].text,/当前人设/);assert.ok(contexts.get('qq-rsi-memory').text({agent}).includes('记忆'));
+    assert.equal((await call('qq_wait_for_messages',{},'restore')).result.reason,'handoff');
+    await call('qq_send_message',{messages:['回来啦']},'returned');return '';
+  });
+  f=bridgeFixture(t,{...h.config,userAwaySeconds:1800},h.client);f.bridge.now=()=>clock;f.session.lastHumanMessageAt=clock;
+  f.session.promptVersion=2;f.session.conversationPolicyVersion=6;f.session.promptProfileRevision=new PromptProfiles(f.root).resolve(f.route.key).promptProfileRevision;
+  await f.bridge.handle(f.route,0);assert.equal(f.session.absence.phase,'asleep');assert.equal(f.session.absence.memorySaved,true);assert.ok(f.bridge.memory(f.route.key).hasReceipt(f.session.absence.digestId));assert.equal(phase,2);assert.deepEqual(text(f.sent),['收到']);
+  clock+=1000;await f.bridge.handle({...f.route,messageId:'m2',qqMessageId:'2',text:'我回来了'},0);
+  assert.equal(f.session.id,'session');assert.equal(f.session.absence.phase,'active');assert.deepEqual(text(f.sent),['收到','回来啦']);assert.equal(Object.keys(f.bridge.state.sessions).length,1);
+});
+
+test('DSH scheduled wake restores QQ tools in sleeping original session and sends once through Bridge',async t=>{
+  let f,phase=0;
+  const h=await harness(t,async({call,message})=>{
+    phase++;assert.match(message.content[0].text,/预约提醒/);assert.match(message.content[0].text,/当前人设/);
+    await call('qq_send_message',{messages:['刚想到一件有意思的事']},'scheduled-answer');
+    assert.equal((await call('qq_wait_for_messages',{},'sleep-again')).result.reason,'user-away');
+    await call('qq_handoff',{action:'create',summary:'预约主动分享已发送一次。',unfinished:[]},'handoff');return '';
+  });
+  f=bridgeFixture(t,{...h.config,memoryEnabled:false,remindersEnabled:true},h.client);f.session.backend=h.config.dshUrl;f.session.lastHumanMessageAt=1;f.session.absence={phase:'asleep'};f.bridge.syncWakeRoutes();
+  const router=new ScheduleWakeRouter({agents:{get:id=>id==='session'?h.agent:null}},f.root);t.after(()=>router.dispose());
+  const message={source:{kind:'schedule'},content:[{type:'text',text:'[SCHEDULE REMINDER] occurrence:unique; 分享有意思的事'}]};
+  h.agent.followup(message);assert.equal(phase,0);f.bridge.drainScheduledWakes();await f.bridge.queues.get(f.route.key);
+  assert.equal(phase,1);assert.deepEqual(text(f.sent),['刚想到一件有意思的事']);assert.equal(f.session.absence.phase,'asleep');assert.equal(f.session.lastHumanMessageAt,1);
+  h.agent.followup(message);f.bridge.drainScheduledWakes();assert.equal(phase,1);
+  const p=wakePaths(f.root);assert.equal(readWakeJson(path.join(p.queue,fs.readdirSync(p.queue)[0])).state,'completed');
+});
+
+test('interrupted departure finishes in original session before queued arrivals are released',async t=>{
+  let phase=0;
+  const h=await harness(t,async({call,message})=>{
+    phase++;assert.match(message.content[0].text,/离开收尾阶段/);
+    await call('qq_handoff',{action:'create',summary:'恢复中断的交接，等待回来。',unfinished:[]},'recover-handoff');return '';
+  });
+  const f=bridgeFixture(t,{...h.config,memoryEnabled:false},h.client);
+  f.session.absence={phase:'handoff',at:1};f.session.blocked=true;
+  f.bridge.deferForMaintenance({...f.route,messageId:'waiting-arrival'});
+  await f.bridge.sweep();
+  assert.equal(phase,1);assert.equal(f.session.id,'session');assert.equal(f.session.absence.phase,'asleep');assert.equal(f.sent.length,0);
+  assert.equal(f.bridge.state.maintenanceInbox[f.route.key].find(r=>r.route.messageId==='waiting-arrival').state,'pending');
 });

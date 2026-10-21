@@ -31,7 +31,7 @@ export class MessageTools {
       qq_send_poke:['targetUserId'],
     };
     if(!fields[tool]||Object.keys(args).some(k=>!fields[tool].includes(k)))throw Error('工具或参数无效；不能指定其他聊天');
-    if(++this.reads>(this.continuous?128:20))throw Error('本轮消息工具次数超限');
+    if(!this.continuous&&++this.reads>20)throw Error('本轮消息工具次数超限');
     if(tool==='qq_social_state')return {wake:this.inbox.read().wake,sleeping:this.inbox.sleeping(),unreadCount:this.inbox.list({unread:true,limit:1}).unreadCount,enabled:this.config.wakeEnabled};
     if(tool==='qq_set_wake_config'){
       if(!this.config.wakeEnabled)throw Error('潜水与唤醒未启用');
@@ -65,8 +65,8 @@ export class MessageTools {
     }
     const messages=tool==='qq_reply'?args.message:args.messages;
     const rows=Array.isArray(messages)?messages:[messages];
-    if(rows.some(isSilentReply))throw Error('无回复标记不能作为消息发送；请选择qq_no_reply');
-    if(!rows.length||rows.length>8||rows.some(x=>typeof x!=='string'||!x.trim()||x.length>12000)||this.outputs.length+rows.length>(this.continuous?32:8))throw Error('每次最多8条非空消息，每条最多12000字；累计条数已达限制');
+    if(rows.some(isSilentReply))throw Error('无回复标记不能作为消息发送；请保持沉默；持续聊天调用qq_wait_for_messages');
+    if(!rows.length||rows.length>8||rows.some(x=>typeof x!=='string'||!x.trim()||x.length>12000)||!this.continuous&&this.outputs.length+rows.length>8)throw Error('每次最多8条非空消息，每条最多12000字；非持续回合累计最多8条');
     if(tool==='qq_reply'&&!args.replyToMessageId)throw Error('请提供引用消息ID');
     let replyTo=args.replyToMessageId;
     if(replyTo!=null){if(!/^-?[1-9]\d{0,19}$/.test(String(replyTo)))throw Error('消息ID无效');this.inbox.detail({messageId:replyTo});replyTo=String(replyTo);}

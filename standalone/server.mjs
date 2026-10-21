@@ -9,7 +9,8 @@ import { Bridge } from './lib/bridge.mjs';
 import { DshClient } from './lib/dsh.mjs';
 import { importedStores } from './lib/import-memory.mjs';
 import { probeQQ } from './lib/onebot.mjs';
-import { MemoryStore,scopeOf } from './lib/memory.mjs';
+import { MemoryStore } from './lib/memory.mjs';
+import {currentRoleState} from './lib/role-state.mjs';
 import {Management} from './lib/management.mjs';
 import {Knowledge} from './lib/knowledge.mjs';
 import {publicDownload} from './lib/media.mjs';
@@ -24,6 +25,9 @@ import {DiagnosticLogs,redactLog} from './lib/diagnostic-logs.mjs';
 import {wakeSeconds} from './lib/timing.mjs';
 import {recoverMemoryReset,resetMemories} from './lib/reset-memory.mjs';
 import {VoiceProfiles} from './lib/voice-profiles.mjs';
+import {PersonaCards,personaIdentity} from './lib/persona-cards.mjs';
+import {PromptProfiles} from './lib/prompt-profiles.mjs';
+import {exportMemory} from './lib/export-memory.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export function createApp({ root = path.dirname(here), runtime = path.join(here,'.runtime'), voice: injectedVoice, bridge: injectedBridge, qqControl: injectedControl, diagnosticOptions } = {}) {
@@ -37,6 +41,18 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
   const qqControl=injectedControl||new QQControl();
   const diagnosticLogs=new DiagnosticLogs(runtime,qqControl,diagnosticOptions);
   const voiceProfiles=new VoiceProfiles(runtime);
+  const personaCards=new PersonaCards(runtime);
+  const promptProfiles=new PromptProfiles(runtime);
+  function promptPayload(key,personaId){
+    if(key)checkKey(key,false,personaId);
+    return {...promptProfiles.view(key,personaId),targets:keys().map(key=>({key,...personaCards.view(key)})),
+      components:[
+        {name:'DSH系统与预设',location:'由DSH管理，包含基础模型指令、已授权工具、审批和工作区上下文。'},
+        {name:'QQ提示词',location:'本页编辑：聊天风格、回复范围、持续等待、模拟、主动搭话、委派、交接、发送纠正及非记忆工具说明。'},
+        {name:'人设',location:'在人设与记忆页面按人格单独编辑，不纳入本页。'},
+        {name:'记忆及记忆维护规则',location:'由当前人格记忆模块注入；记忆正文、人设工具与记忆专用规则不纳入本页。'},
+        {name:'动态聊天数据',location:'当前时间、消息、图片、引用、身份代号、知识资料、模拟编号、工具结果及交接记录自动填入，不是可编辑模板。'}]};
+  }
   function profilePayload(){const state=voiceProfiles.read();return {...state,profiles:state.profiles.map(p=>({...p,status:voice.status({...config,...p.settings})}))};}
   function checkProfile(settings){if(settings.voiceProvider==='mimo'&&settings.mimoTtsMode==='clone')voice.reference(settings.mimoReferenceId);}
   function previewConfig(input){return input.profileId?{...config,...voiceProfiles.get(input.profileId).settings}:config;}
@@ -51,11 +67,12 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
     if(config.botQQ){for(const id of config.privateUsers)values.add(config.botQQ+'/private/'+id);for(const id of config.groups)values.add(config.botQQ+'/group/'+id);}
     return [...values];
   }
-  function checkKey(key,writing=false){
+  function checkKey(key,writing=false,personaId){
     if(!keys().includes(key))throw Error('请选择已配置或已有记忆的聊天');
-    if(writing&&(bridge.jobs?.has(key)||bridge.queues?.has(key)||bridge.maintenance?.has(key)))throw Error('该聊天正在处理消息，请稍后编辑');
+    if(personaId!==undefined){personaCards.get(key,personaId);if(personaId!==personaCards.view(key).activeId)writing=false;}
+    if(writing&&(bridge.jobs?.has(key)||bridge.queues?.has(key)||bridge.maintenance?.has(key)||bridge.startup?.jobs.has(key)))throw Error('该聊天正在处理消息，请稍后编辑');
   }
-  function managed(key){checkKey(key);return {detail:management.inspect(key),personaVoice:voiceProfiles.selection(key),knowledge:new Knowledge(runtime,key).read(),policy:policyView(config,key).effective,lifecycle:(bridge.summary?.()??[]).filter(s=>s.key===key)};}
+  function managed(key,personaId){checkKey(key);personaId=personaCards.get(key,personaId).id;return {detail:management.inspect(key,personaId),roleState:currentRoleState(new MemoryStore(runtime,key,personaId)),personas:personaCards.view(key),personaVoice:voiceProfiles.selection(key,personaId),knowledge:new Knowledge(runtime,key,personaId).read(),policy:policyView(config,key).effective,lifecycle:(bridge.summary?.(config)??[]).filter(s=>s.key===key&&(s.personaId??'default')===personaId)};}
   function policyScopes(){
     return ['private','group',...(config.botQQ?[
       ...config.privateUsers.map(id=>config.botQQ+'/private/'+id),
@@ -65,7 +82,7 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
   function policyPayload(scope){return {scopes:policyScopes(),overriddenScopes:Object.keys(config.chatPolicy.overrides),...policyView(config,scope)};}
   function idleConfig(){
     if(napcatSyncBusy)throw Error('正在同步 NapCat 接口，请稍候');
-    if(bridge.status.state!=='stopped'||bridge.status.active||voice.busy)throw Error('请先停止 QQ 连接并等待语音及消息任务完成，再修改配置');
+    if(bridge.status.state!=='stopped'||bridge.status.active||bridge.startup?.jobs.size||bridge.maintenance?.size||bridge.jobs?.size||bridge.queues?.size||voice.busy)throw Error('请先停止 QQ 连接并等待语音及消息任务完成，再修改配置');
   }
   function audioInput(input,max=12*1024*1024){
     if(typeof input.audio!=='string'||input.audio.length>max||!/^[A-Za-z0-9+/]+={0,2}$/.test(input.audio))throw Error('音频格式不正确');
@@ -73,7 +90,7 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
   }
   const token=randomBytes(32).toString('hex'), cookie=randomBytes(32).toString('hex');
   const assets = new Map([['/', ['text/html; charset=utf-8','index.html']], ['/app.js',['text/javascript; charset=utf-8','app.js']], ['/style.css',['text/css; charset=utf-8','style.css']]]);
-  for(const [url,file] of [['/memory-budget.js','memory-budget.js'],['/memory-viewer.js','memory-viewer.js'],['/memory-layout.js','../lib/legacy-memory/graph-layout.js'],['/memory-view.js','../../dsh-plugin-memory-source/lib/graph-view.js']])assets.set(url,['text/javascript; charset=utf-8',file]);
+  for(const [url,file] of [['/prompt-editor.js','prompt-editor.js'],['/memory-budget.js','memory-budget.js'],['/memory-viewer.js','memory-viewer.js'],['/memory-layout.js','../lib/legacy-memory/graph-layout.js'],['/memory-view.js','../../dsh-plugin-memory-source/lib/graph-view.js']])assets.set(url,['text/javascript; charset=utf-8',file]);
   function json(res,status,value) { res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'}); res.end(JSON.stringify(value)); }
   async function body(req) {
     if (!req.headers['content-type']?.startsWith('application/json')) throw Error('请求需要使用 JSON');
@@ -113,7 +130,14 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
       if (req.method==='GET' && assets.has(url.pathname)) {
         const [type,file]=assets.get(url.pathname); res.writeHead(200,{'Content-Type':type}); res.end(fs.readFileSync(path.join(here,'public',file))); return;
       }
-      if (req.method==='GET' && url.pathname==='/api/status') { json(res,200,{config:publicConfig(config),voice:voice.status(config),bridge:bridge.status,lifecycle:bridge.summary?.()??[],imports:importedStores(runtime)}); return; }
+      if (req.method==='GET' && url.pathname==='/api/status') { json(res,200,{config:publicConfig(config),voice:voice.status(config),bridge:{...bridge.status,startups:bridge.startup?.summary()??[]},lifecycle:bridge.summary?.(config)??[],imports:importedStores(runtime)}); return; }
+      if(req.method==='GET'&&url.pathname==='/api/prompts'){
+        json(res,200,promptPayload(url.searchParams.get('key')||undefined,url.searchParams.get('personaId')||undefined));return;
+      }
+      if(req.method==='GET'&&url.pathname==='/api/manage/export'){
+        const key=url.searchParams.get('key'),personaId=url.searchParams.get('personaId');checkKey(key,false,personaId);
+        const archive=exportMemory(runtime,key,personaId);res.writeHead(200,{'Content-Type':'application/zip','Content-Disposition':"attachment; filename=persona-memory.zip; filename*=UTF-8''"+encodeURIComponent(archive.filename),'Content-Length':archive.bytes.length,'Cache-Control':'no-store'});res.end(archive.bytes);return;
+      }
       if(req.method==='GET'&&url.pathname==='/api/logs'){json(res,200,systemLog.read({level:url.searchParams.get('level')??'',component:url.searchParams.get('component')??''}));return;}
       if(req.method==='GET'&&url.pathname==='/api/logs/related'){
         json(res,200,{...diagnosticLogs.read(config),flow:systemLog.read({component:'flow'}),dshEvents:systemLog.read({component:'dsh'}),status:{state:bridge.status.state,channels:bridge.status.channels,lastObservedAt:bridge.status.lastObservedAt,lastReceivedAt:bridge.status.lastReceivedAt,lastSentAt:bridge.status.lastSentAt,lastError:redactLog(bridge.status.lastError||'',diagnosticLogs.secrets(config))}});return;
@@ -146,10 +170,10 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         json(res,200,{keys,detail:key?new MemoryStore(runtime,key).inspect():null});return;
       }
       if(req.method==='GET'&&url.pathname==='/api/manage'){
-        const key=url.searchParams.get('key'),allKeys=keys();json(res,200,{keys:allKeys,storedKeys:allKeys.filter(k=>fs.existsSync(path.join(runtime,'memories',scopeOf(k),'.runtime','store.json'))),connectedKeys:policyScopes().filter(x=>x.includes('/')),currentBot:config.botQQ,...(key?managed(key):{})});return;
+        const key=url.searchParams.get('key'),allKeys=keys();json(res,200,{keys:allKeys,storedKeys:allKeys.filter(k=>fs.existsSync(path.join(runtime,'memories',personaIdentity(runtime,k).scope,'.runtime','store.json'))),connectedKeys:policyScopes().filter(x=>x.includes('/')),currentBot:config.botQQ,...(key?managed(key,url.searchParams.get('personaId')??undefined):{})});return;
       }
       if(req.method==='GET'&&url.pathname==='/api/sticker/image'){
-        const key=url.searchParams.get('key');checkKey(key);const item=new Knowledge(runtime,key).sticker(url.searchParams.get('id'));
+        const key=url.searchParams.get('key');checkKey(key);const item=new Knowledge(runtime,key,url.searchParams.get('personaId')??undefined).sticker(url.searchParams.get('id'));
         const bytes=await publicDownload(item.url),type=sniffImageMediaType(bytes);if(!type)throw Error('不支持的图片');res.writeHead(200,{'Content-Type':type});res.end(bytes);return;
       }
       if (req.method==='GET' && url.pathname.startsWith('/api/audio/')) {
@@ -157,8 +181,29 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
       }
       if (req.method!=='POST') { json(res,404,{error:'页面不存在'}); return; }
       const input=await body(req);
+      if(url.pathname==='/api/prompts'){
+        if(Object.keys(input).some(k=>!['key','personaId','revision','overrides'].includes(k)))throw Error('提示词保存参数无效');
+        if(input.key){
+          checkKey(input.key,true,input.personaId);
+          const active=personaCards.view(input.key).activeId===input.personaId;
+          if(active&&(bridge.status.state==='connecting'||bridge.status.channels?.[input.key.split('/')[1]]||bridge.awaitingExit?.(input.key)))throw Error('请先停止此人格所在类型的接收并等待任务结束，再保存提示词');
+        }else idleConfig();
+        promptProfiles.save(input);json(res,200,promptPayload(input.key,input.personaId));return;
+      }
+      if(url.pathname==='/api/persona-cards/rename'){
+        checkKey(input.key,true,input.personaId);personaCards.rename(input);json(res,200,managed(input.key,input.personaId));return;
+      }
       const started=Date.now();
       res.once('finish',()=>systemLog.record(res.statusCode<400?'operation.completed':'operation.failed',{level:res.statusCode<400?'info':'error',component:url.pathname.includes('/voice/')?'voice':url.pathname.includes('/qq/')||url.pathname.includes('/bridge/')?'qq':url.pathname.includes('/manage/')?'memory':'panel',operation:url.pathname,durationMs:Date.now()-started}));
+      if(url.pathname==='/api/persona-cards/create'){
+        checkKey(input.key);const card=personaCards.create(input);
+        json(res,200,managed(input.key,card.id));return;
+      }
+      if(url.pathname==='/api/persona-cards/assign'){
+        checkPolicyScope(input.key);if(!input.key.includes('/'))throw Error('请选择具体聊天');
+        if(managementNetwork)throw Error('请等待资料查询或收藏操作完成后切换人格');
+        bridge.configurePersona(input);json(res,200,managed(input.key,input.personaId));return;
+      }
       if(url.pathname==='/api/manage/reset'){
         idleConfig();
         if(managementNetwork)throw Error('正在进行资料查询或收藏操作，请完成后重置');
@@ -194,8 +239,11 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         json(res,200,{config:publicConfig(config),key});return;
       }
       if(url.pathname.startsWith('/api/manage/')){
+        if(input.personaId===undefined&&personaCards.view(input.key).cards.length>1)throw Error('请明确选择人格卡后再保存');
         if(['/api/manage/research','/api/manage/collect','/api/manage/favorites'].includes(url.pathname)){managementNetwork++;res.once('finish',()=>managementNetwork--);}
-        checkKey(input.key,true);const knowledge=new Knowledge(runtime,input.key);
+        checkKey(input.key,true,input.personaId);
+        input.personaId=personaCards.get(input.key,input.personaId).id;
+        const knowledge=new Knowledge(runtime,input.key,input.personaId);
         if(url.pathname==='/api/manage/voice'){
           idleConfig();if(input.profileId)checkProfile(voiceProfiles.get(input.profileId).settings);
           voiceProfiles.assign(input);
@@ -215,7 +263,7 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
           const item=knowledge.sticker(input.id),bytes=await publicDownload(item.url);if(!sniffImageMediaType(bytes))throw Error('表情格式不支持');
           await bridge.call('add_custom_face',{file:'base64://'+bytes.toString('base64')});
         }else throw Error('未知管理操作');
-        json(res,200,managed(input.key));
+        json(res,200,managed(input.key,input.personaId));
       }else if(url.pathname==='/api/chat-wake'){
         checkPolicyScope(input.key);if(!input.key.includes('/'))throw Error('请选择具体好友或群');
         checkKey(input.key,true);
@@ -271,12 +319,18 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
       else if(url.pathname==='/api/qq/desktop-start') { await syncInterface();json(res,200,await desktop.start(config)); }
       else if(url.pathname==='/api/session/new'){
         if(typeof input.key!=='string'||!/^\d{5,20}\/(?:private|group)\/\d{5,20}$/.test(input.key))throw Error('请选择一个现有聊天');
+        if(input.personaId&&input.personaId!==personaCards.view(input.key).activeId)throw Error('只能为当前正在使用的人格开启新会话');
         json(res,200,await bridge.newConversation(input.key));
       }
       else if (url.pathname==='/api/bridge/start') {
         const kind=input.kind??'all';if(!['all','private','group'].includes(kind))throw Error('请选择私聊、群聊或全部');
         if(bridge.status.state==='stopped')await syncInterface();
-        await bridge.start(config,kind);json(res,200,bridge.status);
+        await bridge.start(config,kind,{resumeCompleted:input.resumeCompleted===true});json(res,200,bridge.status);
+      }
+      else if (url.pathname==='/api/bridge/resume') {
+        if(typeof input.key!=='string'||!bridge.state.maintenanceInbox[input.key])throw Error('请选择已有消息队列');
+        // Launch asynchronously: an accepted continuous conversation can run for minutes.
+        const resumed=bridge.resumeDeferred(input.key);resumed?.catch(error=>bridge.reportError(error.message));json(res,200,{resumed:true});
       }
       else if (url.pathname==='/api/bridge/stop') { bridge.stop(input.kind??'all'); json(res,200,bridge.status); }
       else json(res,404,{error:'接口不存在'});

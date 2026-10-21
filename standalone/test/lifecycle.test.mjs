@@ -52,7 +52,7 @@ test('only matching successful compactions count, replays and maintenance cannot
 test('30-minute idle digest writes a receipt and 15 compactions rotate only after that receipt',async t=>{
   const store=new MemoryStore(temp(t),key),s=session();for(let i=0;i<15;i++)compression(s,store,'cp-'+i,i*2+1);
   const rotated=[];let called=0;
-  const dsh={async prompt(id,text){called++;assert.equal(id,'old');assert.match(text,/空闲记忆整理/);return JSON.stringify({reply:'',summary:'无新增',memory:[]});}};
+  const dsh={async prompt(id,text){called++;assert.equal(id,'old');assert.match(text,/记忆整合阶段/);return JSON.stringify({reply:'',summary:'无新增',memory:[]});}};
   await maintain({session:s,config:defaults,store,dsh,persist(){},now:()=>2800000,isCurrent:()=>true,signal:new AbortController().signal,rotate:async receipt=>{assert.ok(store.hasReceipt(receipt));rotated.push(receipt);}});
   assert.equal(called,1);assert.equal(rotated.length,1);assert.equal(s.life.digestedIds.length,15);assert.equal(s.life.pending,null);
 });
@@ -61,7 +61,7 @@ test('failed maintenance retains pending compactions and no receipt can cause ro
   await assert.rejects(maintain({session:s,config:{...defaults,rotateAfterCompactions:1},store,dsh:{async prompt(){return'我已整理好了';}},persist(){},now:()=>2800000,isCurrent:()=>true,signal:new AbortController().signal,rotate(){assert.fail();}}),/格式/);
   assert.deepEqual(s.life.digestedIds,[]);assert.equal(s.life.receipt,null);assert.equal(store.state.completed,0);assert.ok(s.life.retryAt>2800000);
 });
-test('new input cancels maintenance, preserves undigested work, and never publishes a stale result',async t=>{
+test('explicit lifecycle invalidation preserves undigested work and never publishes a stale result',async t=>{
   const store=new MemoryStore(temp(t),key),s=session();compression(s,store,'cp',1);
   const controller=new AbortController();let release;
   const task=maintain({session:s,config:defaults,store,dsh:{prompt(){return new Promise(resolve=>release=resolve);}},persist(){},now:()=>2800000,isCurrent:()=>true,signal:controller.signal,rotate(){assert.fail();}});

@@ -1,3 +1,4 @@
+import {mountPromptEditor} from './prompt-editor.js';
 import {renderHealth,renderGraph} from './memory-viewer.js';
 import {mountMemoryBudget} from './memory-budget.js';
 const $=id=>document.getElementById(id);
@@ -24,7 +25,7 @@ function paintPolicy(data){
   policyData={...data,savedPatch:data.savedPatch??(data.scope===data.kind?data.effective:data.override)};
   const specific=data.scope!==data.kind,container=$('policy-fields');container.replaceChildren();
   const cards=new Map();
-  $('policy-context').textContent=(specific?'只影响此聊天；未勾选“单独设置”的项目继承'+(data.kind==='group'?'群聊':'私聊')+'默认值。':'作为'+(data.kind==='group'?'所有群聊':'所有私聊')+'的默认规则；独立覆盖的字段优先。')+' 新工作区在首次开启对话时按“日期-QQ号/群号”创建；已有工作区和会话轮换继续沿用原目录。';
+  $('policy-context').textContent=(specific?'只影响此聊天；未勾选“单独设置”的项目继承'+(data.kind==='group'?'群聊':'私聊')+'默认值。':'作为'+(data.kind==='group'?'所有群聊':'所有私聊')+'的默认规则；独立覆盖的字段优先。')+' 新工作区在首次开启对话时按“日期-群聊/私聊-号码-人格名称”创建；已有工作区和会话轮换继续沿用原目录。';
   $('policy-reset').textContent=specific?'清除本聊天覆盖，全部继承':'恢复升级时的默认规则';
   $('policy-delete').hidden=!specific;$('target-remove').hidden=!specific;
   $('policy-delete').disabled=!Object.keys(data.override).length;
@@ -251,10 +252,12 @@ function notice(text,error=false){$('notice').textContent=text;$('notice').class
 async function request(url,body){const response=await fetch(url,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-QQ-RSI':'panel'},body:JSON.stringify(body)});const result=await response.json();if(!response.ok)throw Error(result.error||'请求失败');return result;}
 function fill(config,selected=fields){for(const field of selected){if(field.endsWith('Token')){$(field).value='';continue;}if(switches.includes(field)){$(field).checked=config[field];continue;}$(field).value=Array.isArray(config[field])?config[field].join('\n'):config[field];}$('dsh-key-state').textContent=config.dshTokenConfigured?'已保存':'未配置';$('qq-key-state').textContent=config.qqTokenConfigured?'已保存':'未配置';}
 async function refresh(){const status=await request('/api/status');if(!initialized){fill(status.config);await fillVoice(status.config);initialized=true;}$('service-status').textContent='● 独立服务已运行';paintVoiceStatus(status);$('bridge-status').textContent=status.bridge.state==='running'?'QQ '+(status.bridge.account||'')+' 已连接':status.bridge.state==='connecting'?'正在连接 QQ':'QQ 连接已停止';$('bridge-detail').textContent=status.bridge.lastError||`待处理消息：${status.bridge.active} · 启动后接收名单内已启用的消息`;$('start').disabled=status.bridge.state!=='stopped';$('stop').disabled=status.bridge.state==='stopped';paintChannels(status.bridge);paintLife(status);return status;}
-async function action(button,work){button.disabled=true;notice('正在处理，请稍候…');try{await work();if($('notice').textContent==='正在处理，请稍候…')notice('操作已完成。');}catch(error){notice(error.message,true);}finally{button.disabled=false;if(button.id.startsWith('voice-profile-'))updateProfileButtons();if(button.id==='reference-delete')button.disabled=!$('mimoReferenceId').value;if(button.id==='reference-restore')button.disabled=$('reference-deleted').options.length<=1;await refresh().catch(()=>{});}}
+async function action(button,work){button.disabled=true;notice('正在处理，请稍候…');try{await work();if($('notice').textContent==='正在处理，请稍候…')notice('操作已完成。');}catch(error){notice(error.message,true);}finally{button.disabled=false;if(button.id==='persona-apply'&&managementData)paintPersonaCards(managementData);if(button.id.startsWith('voice-profile-'))updateProfileButtons();if(button.id==='reference-delete')button.disabled=!$('mimoReferenceId').value;if(button.id==='reference-restore')button.disabled=$('reference-deleted').options.length<=1;await refresh().catch(()=>{});}}
+const promptEditor=mountPromptEditor({request,notice});
 const pages={
   voice:['语音与通话','选择语音服务、配置音色并试听；实时通话后续接入。'],
   connections:['连接与配置','管理 DSH、QQ 消息入口与桌面 QQ 连接。'],
+  prompts:['提示词配置','查看和修改共用规则，为每个人格设置独立覆盖。'],
   chat:['会话与聊天','管理会话轮换、多媒体消息、主动搭话与群聊能力。'],
   manage:['人设与记忆','查看记忆库，管理聊天人设、长期记忆、表情与黑话。'],
   qq:['QQ 控制','管理桌面 QQ、NapCat 登录与 OneBot 接入。'],
@@ -267,6 +270,7 @@ for(const tab of document.querySelectorAll('[data-tab]'))tab.addEventListener('c
   document.querySelectorAll('[data-tab]').forEach(x=>{x.classList.toggle('active',x===tab);x.setAttribute('aria-current',x===tab?'page':'false');});
   [$('page-title').textContent,$('page-subtitle').textContent]=pages[name];notice('');
   if(name==='chat'&&!policyData)loadPolicy($('policy-scope').value).catch(e=>notice(e.message,true));
+  if(name==='prompts')promptEditor.load().catch(e=>notice(e.message,true));
   if(name==='manage')loadManagedKeys().catch(e=>notice(e.message,true));
   if(name==='qq')refreshQQ().catch(e=>notice(e.message,true));
   if(name==='logs')loadLogs().catch(e=>notice(e.message,true));
@@ -301,8 +305,11 @@ $('native-plugin-check').addEventListener('click',checkNativePlugin);
 function paintChannels(bridge){
  const running=bridge.state==='running',connecting=bridge.state==='connecting',channels=bridge.channels??{};
  const text='私聊：'+(running&&channels.private?'接收中':'已停止')+' · 群聊：'+(running&&channels.group?'接收中':'已停止');
- $('bridge-detail').textContent=(bridge.lastError?bridge.lastError+' · ':'')+text+' · 待处理：'+bridge.active;
- $('qq-control-bridge').textContent=text+' · 待处理：'+bridge.active;
+ const phases={preparing:'准备整理',digesting:'整理记录',greeting:'旧版招呼阶段（已停用）',publishing:'旧版招呼发送记录',failed:'启动暂停',uncertain:'发送待核实'};
+ const startup=(bridge.startups??[]).filter(s=>phases[s.phase]).map(s=>`${s.key.includes('/group/')?'群':'私聊'} ${s.key.split('/').at(-1)}：${phases[s.phase]}${s.batches?' '+s.completed+'/'+s.batches:''} · 排队 ${s.queued} 条`).join('；');
+ const detail=text+' · 待处理：'+bridge.active+(startup?' · '+startup:'');
+ $('bridge-detail').textContent=(bridge.lastError?bridge.lastError+' · ':'')+detail;
+ $('qq-control-bridge').textContent=detail;
  for(const prefix of ['', 'qq-control-']){
   $(prefix+'start').disabled=connecting||(running&&channels.private&&channels.group);
   $(prefix+'stop').disabled=bridge.state==='stopped';
@@ -333,25 +340,34 @@ function pageSelect(){const page=managementData.detail.pages.find(p=>p.name===$(
 function memoryDirty(){
   if(!managementData||!loadedKey)return false;
   const page=managementData.detail.pages.find(p=>p.name===$('page-path').value);
-  return $('persona-text').value!==managementData.detail.persona||$('page-text').value!==(page?.text??'')||(!page&&!!$('page-path').value)||$('persona-voice-profile').value!==(managementData.personaVoice?.saved?'__saved__':'');
+  return $('persona-display-name').value!==managementData.detail.personaName||$('persona-text').value!==managementData.detail.persona||$('page-text').value!==(page?.text??'')||(!page&&!!$('page-path').value)||$('persona-voice-profile').value!==(managementData.personaVoice?.saved?'__saved__':'');
 }
-function managedInput(){if(!loadedKey||loadedKey!==$('manage-key').value)throw Error('请先加载选中聊天的资料');return {key:loadedKey};}
+function managedInput(){if(!loadedKey||loadedKey!==$('manage-key').value||managementData?.detail.personaId!==$('persona-card').value)throw Error('请先加载选中人格的资料');return {key:loadedKey,personaId:managementData.detail.personaId};}
 function paintManaged(data){
  if(data.detail.key!==loadedKey||$('manage-key').value!==loadedKey)return;
  const prior=managementData?.detail;
- const draft=prior?.key===loadedKey?{
+ const draft=prior?.key===loadedKey&&prior.personaId===data.detail.personaId?{
+   name:$('persona-display-name').value!==prior.personaName?$('persona-display-name').value:null,
    voice:$('persona-voice-profile').value!==(managementData.personaVoice?.saved?'__saved__':'')?$('persona-voice-profile').value:null,
    persona:$('persona-text').value!==prior.persona?$('persona-text').value:null,
    path:$('page-path').value,text:$('page-text').value,
    pageDirty:$('page-text').value!==(prior.pages.find(p=>p.name===$('page-path').value)?.text??'')||(!prior.pages.some(p=>p.name===$('page-path').value)&&!!$('page-path').value),
  }:null;
- managementData=data;$('manage-content').hidden=false;$('new-conversation').disabled=false;
+ managementData=data;$('manage-content').hidden=false;$('new-conversation').disabled=data.detail.personaId!==data.personas.activeId;
+ paintPersonaCards(data);
+ $('persona-display-name').value=draft?.name??data.detail.personaName;
+ $('memory-export').hidden=false;$('memory-export').href='/api/manage/export?'+new URLSearchParams({key:loadedKey,personaId:data.detail.personaId});
+ const role=$('role-state');role.replaceChildren();
+ if(data.roleState){
+  role.append(element('p','更新于 '+new Date(data.roleState.savedAt).toLocaleString()+' · 已保存到本人格长期记忆'));
+  for(const [key,label] of Object.entries({activity:'正在做什么',mood:'情绪',attention:'注意力',progress:'事情进展',nextIntent:'下一步打算'}))role.append(element('p',label+'：'+data.roleState[key]));
+ }else role.append(element('p','尚无已保存的角色推演。开启接收和长期记忆后，定时推演将逐次保存。'));
  paintPersonaVoice(data.personaVoice);
  if(draft?.voice!==null&&draft?.voice!==undefined){$('persona-voice-profile').value=draft.voice;$('persona-voice-state').textContent+=' 另有未保存的语音选择。';}
  $('memory-reset').disabled=false;
- $('memory-kind').value=loadedKey.split('/')[1];populateMemoryNumbers();$('memory-id').value=loadedKey;
+ populateMemoryNumbers();$('memory-id').value=loadedKey;
  $('slang-card').hidden=!loadedKey.includes('/group/');
- $('memory-overview').textContent=chatLabel(loadedKey)+' · 长期记忆：'+(data.policy?.memoryEnabled?'开启':'关闭')+' · 原 dsh-plugin-memory 核心适配。此处修改仅影响选中的聊天。';
+ $('memory-overview').textContent=chatLabel(loadedKey)+' · '+data.detail.personaName+' · 长期记忆：'+(data.policy?.memoryEnabled?'开启':'关闭')+'。此处修改仅影响这张人格卡。';
  $('memory-directory').value=data.detail.insights.store;
  $('memory-settings-summary').textContent='新会话记忆注入：'+(data.policy?.memoryAutoInject?'开启':'关闭')+' · memory 操作协议：'+(data.policy?.memoryRegisterSkill?'开启':'关闭')+' · 仅最近活跃聊天注入：'+(data.policy?.memoryActiveOnly?'开启':'关闭')+' · 主动追忆：'+(data.policy?.proactiveEnabled?'开启':'关闭');
  $('memory-settings').disabled=loadedKey.split('/')[0]!==currentBot;
@@ -370,7 +386,7 @@ function paintManaged(data){
  const history=data.detail.history;
  $('manage-health').append(element('p',history?.state==='ready'?'本地 Git 历史已保存 · '+history.commit.slice(0,8):history?.state==='unavailable'?history.message:'本地 Git 历史将在首次保存记忆或人设时建立；仅保存在本机。'));
  const stickers=$('stickers');stickers.replaceChildren();
- for(const item of data.knowledge.stickers){const card=element('div');card.className='library-item';const img=element('img');img.alt=item.note||'收藏表情';img.loading='lazy';img.src='/api/sticker/image?key='+encodeURIComponent(loadedKey)+'&id='+encodeURIComponent(item.id);card.append(img);
+ for(const item of data.knowledge.stickers){const card=element('div');card.className='library-item';const img=element('img');img.alt=item.note||'收藏表情';img.loading='lazy';img.src='/api/sticker/image?key='+encodeURIComponent(loadedKey)+'&personaId='+encodeURIComponent(data.detail.personaId)+'&id='+encodeURIComponent(item.id);card.append(img);
  const note=element('input');note.value=item.note;note.setAttribute('aria-label','表情含义');note.maxLength=300;
  const tags=element('input');tags.value=item.tags.join(' ');tags.setAttribute('aria-label','表情标签');
  const save=element('button','保存表情笔记');save.className='secondary';save.onclick=()=>action(save,async()=>{paintManaged(await request('/api/manage/knowledge',{...managedInput(),id:item.id,kind:'sticker',revision:managementData.knowledge.revision,note:note.value,tags:tags.value.split(/\s+/).filter(Boolean)}));notice('表情笔记已保存。');});
@@ -414,33 +430,33 @@ $('persona-voice-save').onclick=()=>action($('persona-voice-save'),async()=>{
  manageBusy=true;
  try{
   const data=await request('/api/manage/voice',{...input,profileId,revision:managementData.personaVoice.revision});
-  if(loadedKey!==input.key)return;
+  if(loadedKey!==input.key||managementData?.detail.personaId!==input.personaId)return;
   // Mark only this choice as acknowledged; preserve unrelated persona/page drafts.
   managementData.personaVoice=data.personaVoice;paintPersonaVoice(data.personaVoice);paintManaged(data);
   notice(profileId?'此人设的语音副本已保存，下次处理消息生效。':'已清除独立语音选择，沿用全局默认。');
  }finally{manageBusy=false;}
 });
 function populateMemoryNumbers(){
- const old=$('memory-id').value,kind=$('memory-kind').value;
+ const old=$('memory-id').value;
  $('memory-id').replaceChildren(new Option('请选择好友或群',''));
- for(const key of managedKeys.filter(k=>k.split('/')[1]===kind))$('memory-id').append(new Option(chatLabel(key)+(storedKeys.includes(key)?' · 已有资料':' · 尚无资料')+(key.split('/')[0]===currentBot?'':' · 历史账号 '+key.split('/')[0]),key));
+ for(const key of managedKeys)$('memory-id').append(new Option(chatLabel(key)+(storedKeys.includes(key)?' · 已有资料':' · 尚无资料')+(key.split('/')[0]===currentBot?'':' · 历史账号 '+key.split('/')[0]),key));
  if(managedKeys.includes(old))$('memory-id').value=old;
 }
-$('memory-kind').onchange=populateMemoryNumbers;
 $('memory-id').onchange=()=>{if($('memory-id').value)$('memory-open').click();};
 function paintLife(status){
  if(!loadedKey)return;
- const sessions=(status.lifecycle??[]).filter(s=>s.key===loadedKey);
- $('lifecycle-status').textContent=sessions.length?sessions.map(s=>(s.title?s.title+' · ':'')+'已压缩 '+s.compactions+' 次 · 待整理 '+s.pendingCompactions+' 次'+(s.maintenance?' · 整理中':'')+(s.blocked?' · 旧回合已隔离':'')+(s.workspace?'\n工作区：'+s.workspace:'')).join('\n'):'此聊天暂无运行会话；记忆库可独立管理。';
+ const sessions=(status.lifecycle??[]).filter(s=>s.key===loadedKey&&(s.personaId??'default')===managementData?.detail.personaId);
+ $('lifecycle-status').textContent=sessions.length?sessions.map(s=>(s.title?s.title+' · ':'')+(s.absence?'来信空闲 '+Math.floor(s.absence.seconds/60)+' 分钟 / '+Math.ceil(s.absence.thresholdSeconds/60)+' 分钟 · '+({active:'对话中',handoff:'保存交接中',digest:'整理记忆中',asleep:'已休眠'}[s.absence.phase]??s.absence.phase)+' · ':'')+'已压缩 '+s.compactions+' 次 · 待整理 '+s.pendingCompactions+' 次'+(s.maintenance?' · 整理中':'')+(s.blocked?' · 旧回合已隔离':'')+(s.workspace?'\n工作区：'+s.workspace:'')).join('\n'):'此聊天暂无运行会话；记忆库可独立管理。';
 }
-async function reloadManaged(){
+async function reloadManaged(personaId){
   const key=$('manage-key').value,serial=++manageSerial;loadedKey='';managementData=null;
-  $('manage-content').hidden=true;$('new-conversation').disabled=true;
+  $('memory-export').hidden=true;$('manage-content').hidden=true;$('new-conversation').disabled=true;
   $('memory-reset').disabled=true;
+  $('persona-apply').disabled=true;$('persona-card').disabled=true;$('persona-card-create').disabled=true;
   if(!key){$('manage-empty').textContent='请选择好友或群，或输入号码打开记忆。';return;}
   $('manage-empty').textContent='正在加载 '+chatLabel(key)+' 的独立资料…';
-  try{const data=await request('/api/manage?key='+encodeURIComponent(key));if(serial!==manageSerial||$('manage-key').value!==key)return;
-    loadedKey=key;paintManaged(data);$('manage-empty').textContent='已加载 '+chatLabel(key)+'。此页保存只修改该聊天，其他好友和群的记忆不受影响。';
+  try{const data=await request('/api/manage?key='+encodeURIComponent(key)+(personaId?'&personaId='+encodeURIComponent(personaId):''));if(serial!==manageSerial||$('manage-key').value!==key)return;
+    loadedKey=key;paintManaged(data);$('manage-empty').textContent='已加载 '+chatLabel(key)+' · '+data.detail.personaName+'。选择预览不会切换正在使用的人格。';
   }catch(error){if(serial===manageSerial){$('manage-empty').textContent='加载失败：'+error.message;throw error;}}
 }
 $('manage-key').onchange=async()=>{
@@ -452,7 +468,37 @@ $('memory-open').onclick=()=>action($('memory-open'),async()=>{
   if(manageBusy)throw Error('请等待当前保存完成');
   if(memoryDirty()&&!await confirmAction('当前有未保存修改，放弃并打开另一份记忆？'))return;
   const key=$('memory-id').value;if(!key)throw Error('请先选择已接入的好友或群');
-  $('manage-key').value=key;await reloadManaged();
+  const personaId=key===loadedKey?managementData?.detail.personaId:undefined;
+  $('manage-key').value=key;await reloadManaged(personaId);
+});
+function paintPersonaCards(data){
+ const selected=data.detail.personaId,active=data.personas.activeId;
+ $('persona-card').replaceChildren(...data.personas.cards.map(c=>new Option(c.name+(c.id===active?' · 当前使用':''),c.id)));
+ $('persona-card').value=selected;$('persona-card').disabled=false;$('persona-card-create').disabled=false;
+ $('persona-apply').disabled=selected===active||loadedKey.split('/')[0]!==currentBot;
+ const activeName=data.personas.cards.find(c=>c.id===active)?.name??'';
+ $('manage-empty').textContent='已加载 '+chatLabel(loadedKey)+' · '+data.detail.personaName+'。选择预览不会切换正在使用的人格。';
+ $('persona-card-state').textContent=selected===active?'当前使用：'+activeName+'。人设和记忆独立保存。':'当前使用：'+activeName+'；正在预览：'+data.detail.personaName+'。点击“确定配置”才会切换。';
+}
+$('persona-card').onchange=async()=>{
+ const previous=managementData?.detail.personaId,selected=$('persona-card').value;
+ if(manageBusy||(memoryDirty()&&!await confirmAction('当前人格有未保存的修改，放弃修改并查看另一张人格卡？'))){$('persona-card').value=previous??'';return;}
+ reloadManaged(selected).catch(e=>notice(e.message,true));
+};
+$('persona-card-create').onclick=()=>action($('persona-card-create'),async()=>{
+ if(manageBusy)throw Error('请等待当前保存完成');
+ if(memoryDirty())throw Error('请先保存当前人格的修改，再创建新卡');
+ const {key}=managedInput();manageBusy=true;
+ try{const data=await request('/api/persona-cards/create',{key,name:$('persona-card-name').value,revision:managementData.personas.revision});
+   managementData=null;paintManaged(data);$('persona-card-name').value='';notice('人格卡已创建，可在下方编辑人设；尚未切换使用。');
+ }finally{manageBusy=false;}
+});
+$('persona-apply').onclick=()=>action($('persona-apply'),async()=>{
+ if(manageBusy)throw Error('请等待当前保存完成');
+ if(memoryDirty())throw Error('请先保存人设、记忆或语音修改，再确定配置');
+ const input=managedInput();manageBusy=true;
+ try{const data=await request('/api/persona-cards/assign',{...input,revision:managementData.personas.revision});paintManaged(data);notice('已配置为 '+data.detail.personaName+'。启动接收后使用这张人格卡。');}
+ finally{manageBusy=false;}
 });
 async function resetMemory(account){
  if(manageBusy)throw Error('请等待当前保存完成');
@@ -506,7 +552,7 @@ $('memory-settings').onclick=()=>action($('memory-settings'),async()=>{
 });
 $('persona-text').addEventListener('input',()=>{$('persona-state').textContent='未保存；仅影响当前聊天。';});
 for(const id of ['page-path','page-text'])$(id).addEventListener('input',()=>{$('page-state').textContent='未保存；仅影响当前聊天。';});
-$('manage-load').onclick=()=>action($('manage-load'),async()=>{if(memoryDirty()&&!await confirmAction('刷新会放弃未保存的人设或记忆修改，继续？'))return;await reloadManaged();notice('已刷新此聊天的人设与记忆。');});
+$('manage-load').onclick=()=>action($('manage-load'),async()=>{if(memoryDirty()&&!await confirmAction('刷新会放弃未保存的人设或记忆修改，继续？'))return;await reloadManaged(managementData?.detail.personaId);notice('已刷新此人格的人设与记忆。');});
 $('page-select').onchange=async()=>{const page=managementData?.detail.pages.find(p=>p.name===$('page-path').value);if($('page-text').value!==(page?.text??'')&&!await confirmAction('当前记忆正文尚未保存，放弃并切换页面？')){$('page-select').value=page?.name??'';return;}pageSelect();};
 $('persona-save').onclick=()=>action($('persona-save'),async()=>{manageBusy=true;try{paintManaged(await request('/api/manage/persona',{...managedInput(),text:$('persona-text').value,revision:managementData.detail.personaRevision}));$('persona-state').textContent='人设已保存，下次消息生效。';notice('人设已保存，下次消息生效。');}finally{manageBusy=false;}});
 async function savePage(forget){const page=$('page-path').value,old=managementData.detail.pages.find(p=>p.name===page);manageBusy=true;try{paintManaged(await request('/api/manage/page',{...managedInput(),page,text:$('page-text').value,revision:old?.revision??managementData.detail.emptyRevision,forget}));$('page-state').textContent=forget?'已忘记此页，历史备份保留。':'记忆页已保存。';notice($('page-state').textContent);}finally{manageBusy=false;}}
@@ -547,3 +593,5 @@ async function confirmAction(message){
 }
 $('confirm-yes').onclick=()=>$('confirm-dialog').close('confirm');
 $('confirm-no').onclick=()=>$('confirm-dialog').close('cancel');
+
+$('persona-rename').onclick=()=>action($('persona-rename'),async()=>{manageBusy=true;try{paintManaged(await request('/api/persona-cards/rename',{...managedInput(),name:$('persona-display-name').value,revision:managementData.personas.revision}));notice('人格名称已保存，新建工作区将使用此名称。');}finally{manageBusy=false;}});

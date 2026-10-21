@@ -3,6 +3,7 @@ import path from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
 import {readJson,writeJson,validate,defaults} from './config.mjs';
 import {MemoryStore} from './memory.mjs';
+import {personaIdentity} from './persona-cards.mjs';
 
 export const voiceSettingFields=['voiceProvider','voice','model','mimoTtsMode','mimoVoice','mimoReferenceId','mimoStyle','mimoDesign','mimoAsrLanguage'];
 const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -33,21 +34,21 @@ export class VoiceProfiles {
     else profile.deletedAt=new Date().toISOString();
     state.revision++;writeJson(this.file,state);return profile;
   }
-  selection(key){
-    const store=new MemoryStore(this.runtime,key),saved=readJson(store.safe('.runtime/persona-voice.json'),null);
+  selection(key,personaId){
+    const store=new MemoryStore(this.runtime,key,personaId),saved=readJson(store.safe('.runtime/persona-voice.json'),null);
     return {saved,revision:hash(saved)};
   }
-  assign({key,profileId,revision}){
+  assign({key,personaId,profileId,revision}){
     if(typeof profileId!=='string')throw Error('请选择语音预设或沿用全局默认');
-    const previous=this.selection(key);if(previous.revision!==revision)throw Error('此人设的语音配置已变化，请刷新后保存');
+    const previous=this.selection(key,personaId);if(previous.revision!==revision)throw Error('此人设的语音配置已变化，请刷新后保存');
     const saved=profileId?{profileId,...this.get(profileId),savedAt:new Date().toISOString()}:null;
     if(saved){delete saved.id;delete saved.updatedAt;}
-    writeJson(new MemoryStore(this.runtime,key).safe('.runtime/persona-voice.json'),saved);
-    return this.selection(key);
+    writeJson(new MemoryStore(this.runtime,key,personaId).safe('.runtime/persona-voice.json'),saved);
+    return this.selection(key,personaId);
   }
   resolve(config,key){
     // Read only: resolving a voice must not create a memory library when disabled.
-    const scope=createHash('sha256').update(key).digest('hex'),dir=path.join(this.runtime,'memories',scope);
+    const {scope}=personaIdentity(this.runtime,key),dir=path.join(this.runtime,'memories',scope);
     const file=path.join(dir,'.runtime','persona-voice.json');
     for(const target of [dir,path.dirname(file),file])if(fs.existsSync(target)&&fs.lstatSync(target).isSymbolicLink())throw Error('人设语音配置路径无效');
     const saved=readJson(file,null);

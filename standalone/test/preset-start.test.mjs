@@ -15,6 +15,7 @@ test('missing configured group preset rejects before QQ connection, preserves co
   let available=[{id:'minimal',name:'私聊'},{id:'standard'}];
   class Dsh{async probe(){return {presets:available};}close(){}}
   const bridge=new Bridge(runtime,{Dsh});
+  bridge.startup.begin=()=>{}; // This fixture isolates preset validation; startup-chat covers the full sequence.
   t.after(async()=>{bridge.stop();for(const s of qq.clients)s.terminate();await new Promise(r=>qq.close(r));fs.rmSync(runtime,{recursive:true,force:true});});
   const config={...defaults,botQQ:'100000001',qqUrl:'ws://127.0.0.1:'+qq.address().port,privateUsers:['100000002'],groups:['100000003'],privatePreset:'minimal',groupPreset:'group-only'};
   await assert.rejects(bridge.start(config,'group'),/群聊.*group-only.*不存在/);

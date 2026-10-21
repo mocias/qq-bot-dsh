@@ -16,7 +16,7 @@ export const defaults = {
   voice: 'Microsoft Huihui Desktop', model: 'small',
   voiceProvider: 'local', mimoApiKey: '', mimoTtsMode: 'preset', mimoVoice: 'mimo_default',
   mimoReferenceId: '', mimoStyle: '', mimoDesign: '', mimoAsrLanguage: 'auto',
-  memoryEnabled: true, memoryIdleSeconds: 1800,
+  memoryEnabled: true, memoryIdleSeconds: 1800, userAwaySeconds:1800,
   memoryConversationIdleEnabled:true,memoryMinTurns:3,memoryStaleEnabled:true,memoryStaleSeconds:7200,memoryStaleCooldownSeconds:10800,memoryStaleMaxPerSession:2, rotateAfterCompactions: 15,
   personaPolicy:'participants',
   memoryAutoInject:true,memoryRegisterSkill:true,memoryActiveOnly:false,memoryBootMaxChars:6000,memoryPageMaxChars:10000,proactiveMaxPerSession:0,
@@ -63,7 +63,7 @@ export function validate(input, previous = defaults) {
     } else if (field==='proactiveMaxPerSession') {
       if(!Number.isInteger(value)||value<0||value>100)throw Error('记忆次数超出范围');
       out[field]=value;
-    } else if (['memoryStaleSeconds','memoryStaleCooldownSeconds','memoryIdleSeconds','groupAmbientMinSeconds','recallMinSeconds','recallMaxSeconds','groupProactiveMinSeconds','groupProactiveMaxSeconds'].includes(field)) {
+    } else if (['userAwaySeconds','memoryStaleSeconds','memoryStaleCooldownSeconds','memoryIdleSeconds','groupAmbientMinSeconds','recallMinSeconds','recallMaxSeconds','groupProactiveMinSeconds','groupProactiveMaxSeconds'].includes(field)) {
       if(!Number.isInteger(value)||value<1||value>604800)throw Error('时间间隔应为 1～604800 秒');out[field]=value;
     } else if (['memoryMinTurns','memoryStaleMaxPerSession','groupAmbientDelaySeconds','rotateAfterCompactions','recallMaxPerDay','groupProactiveMaxPerDay','voiceQuietStart','voiceQuietEnd','groupMinReplyGapSeconds','groupMaxRepliesPerHour'].includes(field)) {
       const zero=field.endsWith('PerDay')||field.startsWith('voiceQuiet')||['groupMinReplyGapSeconds','groupMaxRepliesPerHour'].includes(field);

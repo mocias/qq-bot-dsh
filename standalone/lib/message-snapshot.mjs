@@ -48,6 +48,7 @@ export function messageView(message,budget=4000,attachments=[]) {
 export function messageSnapshot(route) {
   const [bot,type,id]=(route.key??'').split('/');
   return {version:2,chat:{type,id},self:route.botIdentity??identity(bot),
+    ...(route.replyPolicy?{replyPolicy:route.replyPolicy}:{}),
     trigger:{kind:route.trigger?'scheduled':route.ambient?'ambient':'direct',messageIds:routeSnapshots(route).map(m=>m.qqMessageId),...(route.trigger?{prompt:route.text}: {})},
     messages:routeSnapshots(route).map(m=>messageView(m,12000,(route.images??[]).map(i=>i.name))),
     context:(route.trigger?route.scheduledContext??[]:route.contextMessages??[]).map(m=>messageView(m,1000,(route.images??[]).map(i=>i.name))),omitted:route.contextOmitted??0};

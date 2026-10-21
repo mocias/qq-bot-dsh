@@ -3,7 +3,7 @@ import {randomBytes,timingSafeEqual} from 'node:crypto';
 import {once} from 'node:events';
 
 // One short-lived capability per DSH run, never exposed to the model.
-export async function nativeCallback({sessionId,runId,allowed,execute,signal,continuous=false}){
+export async function nativeCallback({sessionId,runId,allowed,execute,control,signal,continuous=false}){
   const token=randomBytes(32).toString('hex'), calls=new Map();
   let closed=false,tail=Promise.resolve(),count=0;
   const server=http.createServer(async(req,res)=>{
@@ -16,15 +16,16 @@ export async function nativeCallback({sessionId,runId,allowed,execute,signal,con
       let size=0;const chunks=[];
       for await(const chunk of req){size+=chunk.length;if(size>300000)throw Error('工具参数过大');chunks.push(chunk);}
       const value=JSON.parse(Buffer.concat(chunks).toString());
-      if(value.sessionId!==sessionId||value.runId!==runId||typeof value.callId!=='string'||value.callId.length>200||!allowed.includes(value.tool))throw Error('工具不属于当前会话或本轮');
-      const signature=JSON.stringify([value.tool,value.args]);
+      const internal=typeof value.control==='string'&&typeof control==='function'&&value.tool===undefined;
+      if(value.sessionId!==sessionId||value.runId!==runId||typeof value.callId!=='string'||value.callId.length>200||(!internal&&!allowed.includes(value.tool)))throw Error('工具不属于当前会话或本轮');
+      const signature=JSON.stringify([value.tool,value.control,value.args]);
       let saved=calls.get(value.callId);
       if(saved&&saved.signature!==signature)throw Error('重复工具调用ID的参数不一致');
       if(!saved){
-        if(++count>(continuous?128:32))throw Error('本轮原生工具调用次数超限');
+        if(!continuous&&++count>32)throw Error('本轮原生工具调用次数超限');
         const promise=tail.then(async()=>{
           if(closed||signal?.aborted)throw Error('本轮已停止');
-          return execute(value.tool,value.args,value.callId);
+          return internal?control(value.control,value.args):execute(value.tool,value.args,value.callId);
         }).catch(error=>({error:error.message}));
         tail=promise.then(()=>{});saved={signature,promise};calls.set(value.callId,saved);
       }

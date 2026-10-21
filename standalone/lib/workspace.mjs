@@ -1,5 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {personaIdentity} from './persona-cards.mjs';
+
+export function workspacePersonaName(name){
+  return Array.from(String(name).normalize('NFKC').replace(/[<>:"/\\|?*\x00-\x1f\x7f]/g,'_')).slice(0,40).join('').replace(/[. ]+$/g,'').trim()||'未命名人格';
+}
 
 export const beijingDate=now=>new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
 export function workspaceFor(runtime,state,route,scope,now,persist){
@@ -11,7 +16,9 @@ export function workspaceFor(runtime,state,route,scope,now,persist){
   const legacy=path.join(runtime,'workspaces',scope);
   if(fs.existsSync(legacy)){mappings[scope]=legacy;persist();return legacy;}
   const [bot,kind,id]=route.key.split('/');
-  const parent=path.join(runtime,'workspaces',bot,kind==='group'?'群聊':'私聊'),name=beijingDate(now)+'-'+id;
+  const {personaName}=personaIdentity(runtime,route.key,route.personaId);
+  const mode=kind==='group'?'群聊':'私聊';
+  const parent=path.join(runtime,'workspaces',bot,mode),name=[beijingDate(now),mode,id,workspacePersonaName(personaName)].join('-');
   let dir=path.join(parent,name),number=1;
   const used=new Set(Object.values(mappings).map(x=>path.resolve(x).toLowerCase()));
   while(fs.existsSync(dir)||used.has(path.resolve(dir).toLowerCase()))dir=path.join(parent,'重建-'+(++number),name);

@@ -43,3 +43,9 @@ QQ CQ parsing and face labels import the preserved dsh-onebot-source/lib/cq.js (
 # Version 0.12
 
 The current public qq-bridge main sources (src/mcp-snowluma-safe.js, src/bridge.js and config.example.json, read 2026-10-20) were used to adapt message-query, unread-cursor, quote, mention, queued-send, poke and wake behavior to this host. The upstream MIT copyright and permission notice above continue to apply to adapted material. The host keeps its own scoped storage, dispatch scheduler, OneBot transport and final-turn delivery semantics; no SnowLuma source, SDK or second bridge runtime is bundled. See docs/QQ-CHAT-0.12.md for deliberate differences.
+
+## 0.19 chat projection and style
+
+The exact 【反AI味】 reminder and behavioral guidance were adapted from the locally retained qq-bridge reference (src/bridge.js and dsh/agent-presets/qq-chat-v2/agent.cordis.yml, reviewed 2026-10-21). The MIT attribution and license above apply. Session-token authentication and the upstream runtime were not imported; native host scopes remain authoritative.
+
+0.19.1: `lib/qq-bridge-style.mjs` copies six social/style sections verbatim from `dsh/agent-presets/qq-chat-v2/agent.cordis.yml` in qq-bridge. Waiting behavior is adapted to local second-based parameters and scoped tools; no model-visible session token is used. The MIT notice above applies.

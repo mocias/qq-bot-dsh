@@ -16,7 +16,7 @@ const key='100000001/private/100000002',route={key,id:'100000002',sender:'100000
 test('workspace names use Beijing creation date and peer, persist across dates and isolate bot/type/generations',t=>{
  const root=temp(t),state={sessions:{}},now=Date.parse('2026-10-20T16:01:00Z'),persist=()=>{};
  const first=workspaceFor(root,state,route,'scope1',now,persist);
- assert.equal(path.basename(first),'2026-10-21-100000002');
+ assert.equal(path.basename(first),'2026-10-21-私聊-100000002-默认人格');
  assert.equal(workspaceFor(root,state,route,'scope1',now+86400000,persist),first);
  const group={...route,key:'100000001/group/100000002',group:true};
  const other={...route,key:'100000003/private/100000002'};

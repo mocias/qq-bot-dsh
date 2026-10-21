@@ -1,14 +1,14 @@
 import path from 'node:path';
-import {createHash} from 'node:crypto';
+import {personaIdentity} from './persona-cards.mjs';
 import {readJson,writeJson} from './config.mjs';
 import {inboxSnapshot,messageView} from './message-snapshot.mjs';
 
 // Protocol/behavior adapted from Derpyu520/qq-bridge; see docs/QQ-CHAT-0.12.md.
 // Local IDs are cursors, never substitutes for real OneBot message IDs.
 export class ChatInbox {
-  constructor(runtime,key,now=Date.now){
+  constructor(runtime,key,now=Date.now,personaId){
     if(!/^\d{5,20}\/(?:private|group)\/\d{5,20}$/.test(key))throw Error('聊天范围无效');
-    this.file=path.join(runtime,'chat-inbox',createHash('sha256').update(key).digest('hex')+'.json');
+    this.file=path.join(runtime,'chat-inbox',personaIdentity(runtime,key,personaId).scope+'.json');
     this.key=key;this.now=now;
   }
   read(){

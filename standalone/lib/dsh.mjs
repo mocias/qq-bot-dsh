@@ -3,6 +3,7 @@ import WebSocket from 'ws';
 import { localSessionCookie } from './local-dsh-auth.mjs';
 import {nativeCallback} from './native-callback.mjs';
 import {VERSION,PROTOCOL,BUILD_ID} from '../../native-dsh-plugin/lib/schema.mjs';
+import {Continuations,CONTINUOUS_TIMEOUT_MS} from '../../native-dsh-plugin/lib/continuations.mjs';
 
 export function presetIds(result){
   const rows=Array.isArray(result)?result:result?.presets;
@@ -97,9 +98,10 @@ export class DshClient {
     return session.sessionId;
   }
   canSteer(sessionId) { return this.runs.get(sessionId)?.accepting === true; }
-  async steer(sessionId,text) {
+  awaitingChild(sessionId){return this.runs.get(sessionId)?.awaitingChild?.()===true;}
+  async steer(sessionId,text,images=[]) {
     const run=this.runs.get(sessionId);if(!run?.accepting)return false;
-    await run.submit(text,'steer');return true;
+    await run.submit(text,'steer',images);return true;
   }
   async cancel(sessionId) { return this.rpc('session/cancel',{sessionId}); }
   async rename(sessionId,title) { return this.rpc('session/rename',{sessionId,title}); }
@@ -124,15 +126,17 @@ export class DshClient {
     await this.authenticate();
     if(options.signal?.aborted)throw Object.assign(Error('后台整理已让路'),{cancelled:true,acknowledged:true});
     const native=!!this.config.dshNativeTools,runId=randomUUID();
+    const continuous=!!options.nativeTools?.continuous,continuations=new Continuations(),lifetime=new AbortController();
+    const signal=options.signal?AbortSignal.any([options.signal,lifetime.signal]):lifetime.signal;
     if(native&&!options.nativeTools)throw Error('原生回合缺少宿主工具上下文');
     const callback=native?await nativeCallback({sessionId,runId,allowed:options.nativeTools.allowed,
-      execute:options.nativeTools.execute,signal:options.signal}):null;
+      execute:options.nativeTools.execute,signal,continuous}):null;
     if(callback)options.nativeTools.onDeliveryReporter?.(results=>this.rpc('qqRsiNative/release',{sessionId,runId,token:callback.token,results}));
     const url = new URL('/api/remote.mux', this.config.dshUrl); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = new WebSocket(url, { headers: { Cookie: this.cookie }, maxPayload: 8*1024*1024, handshakeTimeout: 10000, followRedirects: false });
     this.sockets.add(socket);
     const streamId = randomUUID();
-    let readyResolve, readyReject, finishResolve, finishReject, submitted = false, currentTurn, settled=false, abortRequested=false;
+    let readyResolve, readyReject, finishResolve, finishReject, submitted = false, currentTurn, settled=false, abortRequested=false,succeeded=false;
     const inputs=new Map(), turns=new Map(),seenEvents=new Set(); let pendingRPC=0,answerEpoch=0,messageOrder=0;
     const ready = new Promise((resolve,reject) => { readyResolve=resolve; readyReject=reject; });
     const finished = new Promise((resolve,reject) => { finishResolve=resolve; finishReject=reject; });
@@ -146,29 +150,39 @@ export class DshClient {
       const affected=[...new Set(ids)].map(id=>turns.get(id));
       const bad=affected.find(t=>t.reason!=='completed');
       if(abortRequested||bad){reject(Object.assign(Error(abortRequested?'后台整理已让路':'DSH 回合未正常完成'),{cancelled:abortRequested,acknowledged:abortRequested&&affected.every(t=>t.ended)}));return;}
+      if(continuous&&(continuations.pending.size||currentTurn!==undefined&&!turns.get(currentTurn)?.ended)){
+        if(continuations.pending.size&&turns.get(currentTurn)?.ended)options.nativeTools.onAwaitingChild?.();
+        return;
+      }
       const messages=affected.flatMap(t=>t.messages).filter(m=>m.epoch===answerEpoch).sort((a,b)=>a.order-b.order).map(m=>m.text.trim()).filter(Boolean);
-      settled=true;run.accepting=false;finishResolve(options.collectMessages?messages:messages.at(-1)||'');
+      settled=true;succeeded=true;run.accepting=false;finishResolve(options.collectMessages?messages:messages.at(-1)||'');
     };
-    const run={accepting:false,submit:async(content,mode)=>{
+    const run={accepting:false,awaitingChild:()=>continuous&&continuations.pending.size>0&&turns.get(currentTurn)?.ended,submit:async(content,mode,images)=>{
       if(settled)throw Error('当前回合已结束');
       const id=randomUUID();inputs.set(id,null);pendingRPC++;
       try{
-        const request={sessionId,mode,requestId:id,clientTimeZone:'Asia/Shanghai',content:[{type:'text',text:`[QQ_INPUT:${id}]\n${content}`},...(mode==='queue'?(options.images??[]):[])]};
+        if(continuous&&mode==='steer'&&turns.get(currentTurn)?.ended)mode='queue';
+        const request={sessionId,mode,requestId:id,clientTimeZone:'Asia/Shanghai',content:[{type:'text',text:`[QQ_INPUT:${id}]\n${content}`},...(images??(inputs.size===1?(options.images??[]):[]))]};
         const result=await this.rpc(native?'qqRsiNative/submit':'session/prompt',native?{...request,
-          runId,version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID,allowed:options.nativeTools.allowed,callback:{url:callback.url,token:callback.token}}:request,id);
+          runId,version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID,allowed:options.nativeTools.allowed,continuous,
+          ...(options.nativeTools.memoryContext?{memoryContext:options.nativeTools.memoryContext()}:{}),callback:{url:callback.url,token:callback.token}}:request,id);
         if(result?.command)throw Error('桥接内容不应触发 DSH 命令');
         if(abortRequested)await this.cancel(sessionId);
       }catch(error){reject(error);throw error;}finally{pendingRPC--;complete();}
     }};
     this.runs.set(sessionId,run);
     const readyTimer = setTimeout(() => reject(Error('DSH 会话快照超时')), 15000);
-    const turnTimer = setTimeout(() => reject(Error('DSH 回复超时；如需工具审批，请在 DSH 中处理')), options.timeoutMs??180000);
+    const turnTimer = setTimeout(() => {
+      if(continuous)lifetime.abort();
+      else reject(Error('DSH 回复超时；如需工具审批，请在 DSH 中处理'));
+    }, options.timeoutMs??(continuous?CONTINUOUS_TIMEOUT_MS:180000));
     const abort=()=>{
       abortRequested=true;run.accepting=false;
       if(!submitted){reject(Object.assign(Error('后台整理已让路'),{cancelled:true,acknowledged:true}));return;}
       this.cancel(sessionId).catch(()=>reject(Object.assign(Error('后台整理取消状态不确定'),{cancelled:true})));
+      if(continuous)complete();
     };
-    options.signal?.addEventListener('abort',abort,{once:true});
+    signal.addEventListener('abort',abort,{once:true});
     socket.on('error', fail); socket.on('close', fail);
     socket.on('open', () => socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'session/follow',
       payload: { args: { request: { address: { kind: 'session', sessionId }, maxMessages: 20 } } } })));
@@ -183,6 +197,12 @@ export class DshClient {
       try {
         if(Number.isSafeInteger(event?.seq)){if(seenEvents.has(event.seq))return;seenEvents.add(event.seq);}
         options.onEvent?.(event);
+        if(continuous)continuations.observe(event);
+        // user/message is emitted only after the tool step finishes. Inbox
+        // insertion is durable earlier, so it can interrupt a pending wait.
+        if(continuous&&event?.type==='agent/inbox/spliced'){
+          for(const message of data.inserted??[])if(continuations.owns(message))options.nativeTools.onChildNotice?.(message,false);
+        }
         if(['turn/start','user/message','assistant/message','turn/end','tool/call','tool/result','approval/request'].includes(event?.type))
           this.systemLog?.record('stream.'+event.type.replace('/','.'),{component:'dsh'});
         if(event?.type==='turn/start'){currentTurn=data.turn;if(!turns.has(currentTurn))turns.set(currentTurn,{messages:[],ended:false});}
@@ -190,6 +210,11 @@ export class DshClient {
           const message=data.message??data;
           const body=(message.content??[]).filter(x=>x.type==='text').map(x=>x.text).join('\n');
           const id=message.source?.rpcId??body.match(/\[QQ_INPUT:([a-f0-9-]+)\]/)?.[1];
+          if(continuous&&continuations.owns(message)&&currentTurn!==undefined){
+            options.nativeTools.onChildNotice?.(message,true);
+            inputs.set(message.id??'child:'+event.seq,currentTurn);
+          }
+          else if(continuous&&!(inputs.has(id)&&message.source?.kind==='plugin:qq-rsi-native'&&message.source?.runId===runId))throw Error('当前DSH会话收到其他来源输入，QQ持续对话已退出');
           if(inputs.has(id)&&inputs.get(id)===null&&currentTurn!==undefined){inputs.set(id,currentTurn);answerEpoch++;}
         }
         const turn=turns.get(data?.turn);
@@ -213,7 +238,8 @@ export class DshClient {
       await run.submit(text,'queue');
       return await finished;
     } finally {
-      run.accepting=false;this.runs.delete(sessionId);options.signal?.removeEventListener('abort',abort);
+      run.accepting=false;this.runs.delete(sessionId);signal.removeEventListener('abort',abort);lifetime.abort();
+      if(continuous&&!succeeded)options.nativeTools.onCancel?.();
       clearTimeout(readyTimer);clearTimeout(turnTimer);this.sockets.delete(socket);socket.close();
       if(callback){
         await callback.close();

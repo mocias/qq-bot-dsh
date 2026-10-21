@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 const bool=(label,section,kinds)=>({type:'boolean',label,section,kinds});
 const number=(label,section,min,max)=>({type:'number',label,section,min,max});
 export const policyFields={
-  messageToolsEnabled:{...bool('消息查询、未读管理与统一回复工具','消息功能'),help:'仅查询本机接入后保留的本聊天最近500条消息；允许群的未提及消息也进入索引，但不会因此自动回复。'},
+  messageToolsEnabled:{...bool('消息查询与未读管理工具','消息功能'),help:'仅查询本机接入后保留的本聊天最近500条消息；允许群的未提及消息也进入索引，但不会因此自动回复。关闭后仍保留原生聊天的基本发送与等待能力。'},
   quoteMode:{type:'select',label:'引用回复',section:'消息功能',options:{auto:'按需引用',never:'不发送引用',always:'普通回复默认引用当前消息'}},
   mentionSend:bool('允许群内 @ 指定成员','消息功能',['group']),
   bubbleMinSeconds:{...number('气泡随机间隔最短（秒）','消息功能',1,60),help:'不同话题分成独立 QQ 消息；每条可分别引用、@ 或不 @。群发送最短间隔更长时优先遵守群限制。'},
@@ -17,12 +17,19 @@ export const policyFields={
   permissionPreset:{type:'select',label:'新对话默认权限',section:'会话与记忆',options:{'':'沿用 DSH 默认','read-only':'只读','workspace-write':'工作区内读写，越界需审批','danger-full-access':'完整访问，不请求审批'},help:'仅用于此聊天以后新建、手动开启或自动轮换的对话，不修改当前对话。完整访问会扩大 DSH 的文件访问权限；QQ 发送范围和本服务记忆工具规则仍保留。新建前核对 DSH 支持的权限，应用失败不会开始聊天。'},
   messagePolicy:{type:'select',label:'新消息处理',section:'会话与记忆',options:{queue:'排队等待',steer:'插入当前回合'}},
   memoryEnabled:{...bool('长期记忆','会话与记忆'),help:'私聊与群聊均可自动记住有来源的稳定事实和偏好，无需每次说“记住”。不同聊天独立保存；模型提出更新，服务校验来源后写入。'},
-  memoryAutoInject:{...bool('新会话开始时注入本聊天记忆','会话与记忆'),help:'人设、记忆快照和工具协议在新会话首次输入时加载一次；之后只传最新消息段。人设在面板被修改时会单独通知一次。'},
-  memoryRegisterSkill:bool('新会话加载原 memory 操作协议','会话与记忆'),
+  memoryAutoInject:{...bool('自动注入本聊天记忆','会话与记忆'),help:'原生模式通过 DSH 运行时上下文加载和更新，执行请求仅追加消息段；关闭自动注入后仍可按需调用记忆工具。旧兼容模式只在新会话初始化时注入。'},
+  memoryRegisterSkill:bool('加载 memory 读写操作指引','会话与记忆'),
+  personaPolicy:{type:'select',label:'自动建立与修改本聊天人设',section:'会话与记忆',options:{off:'关闭自动修改',participants:'接受私聊对象或本群成员的设定',admins:'仅接受配置的管理员的设定','private-peer-group-admins':'私聊接受对方；群聊仅接受配置的管理员'},help:'模型根据有权限发言人的当前直接消息逐步建立、调整本聊天人设，并保存版本与来源。引用、转发和历史消息不能授权；不改变工具权限。各聊天独立保存，管理面板仍可直接编辑。'},
   memoryActiveOnly:bool('仅最近活跃聊天的新会话注入记忆','会话与记忆'),
   memoryBootMaxChars:{...number('启动资料预算（字符数）','会话与记忆',1000),help:'新会话启动资料的字符预算；无固定业务上限，不限制记忆库的存储容量。'},
   memoryPageMaxChars:{...number('相关记忆页预算（字符数）','会话与记忆',1000),help:'选取相关记忆页的合计字符预算；实际加载量取决于资料和选页规则。'},
-  memoryIdleSeconds:number('有新压缩后，连续空闲多久整理（秒）','会话与记忆',1,604800),
+  memoryIdleSeconds:{...number('后台整理前连续空闲时间（秒）','会话与记忆',1,604800),help:'压缩后、累积对话和久未写入共用一个维护调度；有新消息时让出。不会因此提前轮换。'},
+  memoryConversationIdleEnabled:bool('累积对话后空闲整理','会话与记忆'),
+  memoryMinTurns:number('整理前累积完成对话轮数','会话与记忆',1,10080),
+  memoryStaleEnabled:{...bool('记忆库久未写入时提醒整理','会话与记忆'),help:'仅本会话有真实对话后，在空闲时提醒模型；不向 QQ 发提醒。写入 index 或 log 会刷新计时。'},
+  memoryStaleSeconds:number('记忆库多久未写入后提醒（秒）','会话与记忆',1,604800),
+  memoryStaleCooldownSeconds:number('久未写入提醒冷却（秒）','会话与记忆',1,604800),
+  memoryStaleMaxPerSession:number('每会话久未写入提醒上限','会话与记忆',1,10080),
   rotationEnabled:{...bool('记忆整理成功后自动轮换会话','会话与记忆'),help:'私聊和群聊均支持。达到成功压缩次数、连续空闲且记忆已落盘后，在原工作区开启新会话；保留长期记忆和旧会话。'},
   rotateAfterCompactions:number('轮换前成功压缩次数','会话与记忆',1,10080),
   imageReceive:bool('接收图片并交给模型理解','消息功能'),
@@ -84,7 +91,7 @@ function patch(value,kind){
   const fields=fieldsFor(kind),out={};
   for(const [key,v] of Object.entries(value)){
     // Retired keyword wake settings must not prevent loading older configurations.
-    if(key==='wakeKeywords')continue;
+    if(key==='wakeKeywords'||key==='continuousChat')continue;
     const s=Object.hasOwn(fields,key)?fields[key]:null;if(!s)throw Error('此聊天域不支持设置：'+key);
     if(s.type==='boolean'&&typeof v!=='boolean'||s.type==='number'&&(!Number.isSafeInteger(v)||v<s.min||(s.max!==undefined&&v>s.max)))throw Error(s.label+'格式或范围不正确');
     if(s.type==='select'&&(typeof v!=='string'||!Object.hasOwn(s.options,v)))throw Error(s.label+'无效');

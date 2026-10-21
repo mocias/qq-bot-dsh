@@ -16,7 +16,9 @@ export const defaults = {
   voice: 'Microsoft Huihui Desktop', model: 'small',
   voiceProvider: 'local', mimoApiKey: '', mimoTtsMode: 'preset', mimoVoice: 'mimo_default',
   mimoReferenceId: '', mimoStyle: '', mimoDesign: '', mimoAsrLanguage: 'auto',
-  memoryEnabled: true, memoryIdleSeconds: 1800, rotateAfterCompactions: 15,
+  memoryEnabled: true, memoryIdleSeconds: 1800,
+  memoryConversationIdleEnabled:true,memoryMinTurns:3,memoryStaleEnabled:true,memoryStaleSeconds:7200,memoryStaleCooldownSeconds:10800,memoryStaleMaxPerSession:2, rotateAfterCompactions: 15,
+  personaPolicy:'participants',
   memoryAutoInject:true,memoryRegisterSkill:true,memoryActiveOnly:false,memoryBootMaxChars:6000,memoryPageMaxChars:10000,proactiveMaxPerSession:0,
   rotationEnabled: true, privateMessagePolicy: 'steer', groupMessagePolicy: 'queue',
   qqImages: true, qqForward: true, qqVoiceReceive: true, qqVoiceSend: true,
@@ -38,6 +40,7 @@ export function localUrl(value, schemes) {
 export function validate(input, previous = defaults) {
   input=migrateIntervals(input);previous=migrateIntervals(previous);
   const out = { ...defaults, ...previous };
+  delete out.continuousChat; // Retired setting: native conversations always continue after sending.
   for (const field of Object.keys(defaults)) {
     if(field==='chatPolicy')continue;
     if (!(field in input)) continue;
@@ -50,7 +53,7 @@ export function validate(input, previous = defaults) {
     } else if (field === 'privateUsers' || field === 'groups' || field === 'adminUsers' || field === 'wakeSpeakers') {
       if (!Array.isArray(value) || value.length > 100 || value.some(x => typeof x !== 'string' || !/^\d{5,20}$/.test(x))) throw Error('QQ 号码请使用数字，每行一个');
       out[field] = [...new Set(value)];
-    } else if (['messageToolsEnabled','mentionSend','pokeReceive','pokeSend','wakeEnabled','memoryAutoInject','memoryRegisterSkill','memoryActiveOnly','qqFiles','groupAmbientEnabled','groupToolsEnabled','knowledgeEnabled','remindersEnabled','memoryEnabled','rotationEnabled','dshLocalAuth','qqImages','qqForward','qqVoiceReceive','qqVoiceSend','recallEnabled','groupProactiveEnabled'].includes(field)) {
+    } else if (['memoryConversationIdleEnabled','memoryStaleEnabled','messageToolsEnabled','mentionSend','pokeReceive','pokeSend','wakeEnabled','memoryAutoInject','memoryRegisterSkill','memoryActiveOnly','qqFiles','groupAmbientEnabled','groupToolsEnabled','knowledgeEnabled','remindersEnabled','memoryEnabled','rotationEnabled','dshLocalAuth','qqImages','qqForward','qqVoiceReceive','qqVoiceSend','recallEnabled','groupProactiveEnabled'].includes(field)) {
       if(typeof value!=='boolean') throw Error('开关格式不正确'); out[field]=value;
     } else if (['bubbleMinSeconds','bubbleMaxSeconds'].includes(field)) {
       if(!Number.isInteger(value)||value<1||value>60)throw Error('气泡间隔应为 1～60 秒');out[field]=value;
@@ -60,9 +63,9 @@ export function validate(input, previous = defaults) {
     } else if (field==='proactiveMaxPerSession') {
       if(!Number.isInteger(value)||value<0||value>100)throw Error('记忆次数超出范围');
       out[field]=value;
-    } else if (['memoryIdleSeconds','groupAmbientMinSeconds','recallMinSeconds','recallMaxSeconds','groupProactiveMinSeconds','groupProactiveMaxSeconds'].includes(field)) {
+    } else if (['memoryStaleSeconds','memoryStaleCooldownSeconds','memoryIdleSeconds','groupAmbientMinSeconds','recallMinSeconds','recallMaxSeconds','groupProactiveMinSeconds','groupProactiveMaxSeconds'].includes(field)) {
       if(!Number.isInteger(value)||value<1||value>604800)throw Error('时间间隔应为 1～604800 秒');out[field]=value;
-    } else if (['groupAmbientDelaySeconds','rotateAfterCompactions','recallMaxPerDay','groupProactiveMaxPerDay','voiceQuietStart','voiceQuietEnd','groupMinReplyGapSeconds','groupMaxRepliesPerHour'].includes(field)) {
+    } else if (['memoryMinTurns','memoryStaleMaxPerSession','groupAmbientDelaySeconds','rotateAfterCompactions','recallMaxPerDay','groupProactiveMaxPerDay','voiceQuietStart','voiceQuietEnd','groupMinReplyGapSeconds','groupMaxRepliesPerHour'].includes(field)) {
       const zero=field.endsWith('PerDay')||field.startsWith('voiceQuiet')||['groupMinReplyGapSeconds','groupMaxRepliesPerHour'].includes(field);
       const max=field.startsWith('voiceQuiet')?23:field.endsWith('PerDay')?100:10080;
       if(!Number.isInteger(value)||value<(zero?0:1)||value>max) throw Error('时间或次数设置超出范围'); out[field]=value;
@@ -76,6 +79,7 @@ export function validate(input, previous = defaults) {
   if (input.clearQqToken === true) out.qqToken = '';
   if (input.clearMimoApiKey === true) out.mimoApiKey = '';
   if(!['auto','never','always'].includes(out.quoteMode))throw Error('引用模式无效');
+  if(!['off','participants','admins','private-peer-group-admins'].includes(out.personaPolicy))throw Error('自动人设权限选项无效');
   if(out.bubbleMaxSeconds<out.bubbleMinSeconds)throw Error('气泡最长间隔不能小于最短间隔');
   if(out.wakeKeywords.length>500)throw Error('唤醒关键词过长');
   if(!['local','mimo'].includes(out.voiceProvider))throw Error('请选择本地模式或 MiMo API');

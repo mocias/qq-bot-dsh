@@ -367,6 +367,8 @@ function paintManaged(data){
    else $('graph-selection').textContent+=' · 元信息节点，只读。';
  });
  renderHealth($('manage-health'),data.detail.insights);$('graph-selection').textContent='';
+ const history=data.detail.history;
+ $('manage-health').append(element('p',history?.state==='ready'?'本地 Git 历史已保存 · '+history.commit.slice(0,8):history?.state==='unavailable'?history.message:'本地 Git 历史将在首次保存记忆或人设时建立；仅保存在本机。'));
  const stickers=$('stickers');stickers.replaceChildren();
  for(const item of data.knowledge.stickers){const card=element('div');card.className='library-item';const img=element('img');img.alt=item.note||'收藏表情';img.loading='lazy';img.src='/api/sticker/image?key='+encodeURIComponent(loadedKey)+'&id='+encodeURIComponent(item.id);card.append(img);
  const note=element('input');note.value=item.note;note.setAttribute('aria-label','表情含义');note.maxLength=300;

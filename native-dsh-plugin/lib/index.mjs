@@ -7,7 +7,7 @@ import {defineTool} from '@deepseek-ai/dsh-tools';
 // Stable entry point. The manifest is selected by the same release operation
 // as the standalone service, not by requests or model arguments.
 export default class QQRSINative extends TypertRemoteService{
-  static inject=['agents','tools','sessionController','attachments'];
+  static inject=['agents','tools','sessionController','attachments','systemPrompt','skills'];
   constructor(ctx,config={}){
     super(ctx,'qqRsiNative');this.owner=ctx;this.manifest=config.releaseManifest;
     this.loading=Promise.resolve();this.runtime=null;this.entry=null;

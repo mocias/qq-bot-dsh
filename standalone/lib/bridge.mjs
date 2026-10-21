@@ -14,6 +14,7 @@ import { Proactive,groupRateAllowed } from './proactive.mjs';
 import {parseCqString} from '../../dsh-onebot-source/lib/cq.js';
 import {Knowledge} from './knowledge.mjs';
 import {Management} from './management.mjs';
+import {personaGuide} from './persona.mjs';
 import {ChatTools,TOOL_GUIDE} from './chat-tools.mjs';
 import {ReminderRelay} from './reminders.mjs';
 import {resolveChatConfig} from './chat-policy.mjs';
@@ -21,6 +22,8 @@ import {VoiceProfiles} from './voice-profiles.mjs';
 import {ChatInbox,Participation} from './chat-inbox.mjs';
 import {MessageTools,MESSAGE_GUIDE} from './message-tools.mjs';
 import {nativePrompt,nativeTurn} from './native-turn.mjs';
+import {DELEGATION_POLICY_VERSION} from './delegation-policy.mjs';
+import {ConversationInbox,CONTINUOUS_POLICY_VERSION} from './continuous-chat.mjs';
 import {isSilentReply,planDescription} from './reply-control.mjs';
 import {identity,snapshotOf,routeSnapshots,inboxSnapshot,messageView,evidenceMessages,IDENTITY_RULES,ATTRIBUTION_RULES} from './message-snapshot.mjs';
 
@@ -78,6 +81,7 @@ export class Bridge {
         const store=this.memory(session.route.key);
         if(store.hasReceipt(life.pending.id)){
           life.digestedIds=[...new Set([...life.digestedIds,...(life.pending.compactionIds??[])])];
+          life.hadConversation=!!(life.hadConversation||life.conversation.length);
           life.receipt=life.pending.id;life.digestVersion=life.pending.version;life.conversation=[];
         }else session.blocked=true;
         life.pending=null;this.persist();
@@ -286,7 +290,7 @@ export class Bridge {
     if(!this.participation(route.key).onInput(route,this.configFor(route)))return;
     const command=route.text.match(/^\/([a-z]+)(?:\s+([\s\S]*))?$/i);
     if(command&&!route.ambient){if(this.status.active>=20&&command[1].toLowerCase()!=='stop')return;this.status.active++;this.command(route,command,generation).catch(error=>{this.reportError(error.message);}).finally(()=>{this.status.active=Math.max(0,this.status.active-1);});return;}
-    if(route.ambient){this.backgrounds.get(route.key)?.abort();this.maintenance.get(route.key)?.controller.abort();this.bufferAmbient(route,generation);return;}
+    if(route.ambient&&!this.jobs.get(route.key)?.continuous){this.backgrounds.get(route.key)?.abort();this.maintenance.get(route.key)?.controller.abort();this.bufferAmbient(route,generation);return;}
     const buffered=this.ambient.get(route.key);if(buffered){clearTimeout(buffered.timer);this.ambient.delete(route.key);}
     this.accept(route,generation);
   }
@@ -302,6 +306,13 @@ export class Bridge {
     if(config.memoryEnabled)for(const input of route.messages??[route])this.memory(route.key).record({id:input.messageId,kind:'qq-input',snapshot:snapshotOf(input),segments:input.segments});
     this.persist(); this.status.active++;
     const job=this.jobs.get(route.key),policy=route.group?config.groupMessagePolicy:config.privateMessagePolicy;
+    if(job?.continuous&&!job.controller.signal.aborted){
+      const operation=this.dsh.awaitingChild?.(job.session.id)
+        ?this.insert(route,job,generation)
+        :Promise.resolve(job.conversationInbox.push(route)||this.reportError('持续对话的待处理消息已满'));
+      operation.catch(error=>this.reportError(error.message)).finally(()=>{this.status.active=Math.max(0,this.status.active-1);});
+      return;
+    }
     if(job?.sending&&!route.ambient)job.controller.abort();
     const operation=job&&!job.sending&&!job.background&&!job.toolsActive&&!route.ambient&&!route.hasMedia&&policy==='steer'&&this.dsh.canSteer?.(job.session.id)
       ? this.insert(route,job,generation):this.enqueue(route,generation);
@@ -313,10 +324,11 @@ export class Bridge {
     route=this.messageInput(route,job.session,job);
     route=await this.prepareContext(route,config);
     if(!this.enabled(route)||generation!==this.generation||route.epoch!==undefined&&route.epoch!==(this.epochs.get(route.key)??0))return;
-    if(route.images?.length)return this.enqueue(route,generation);
+    if(route.images?.length&&!job.continuous)return this.enqueue(route,generation);
     job.inputs.push(route);
+    job.onIncoming?.(route);
     try{
-      const accepted=await this.dsh.steer(job.session.id,preparePrompt(this.memory(route.key),route,config,route.evidenceIds??[],{bootstrap:false}));
+      const accepted=await this.dsh.steer(job.session.id,preparePrompt(this.memory(route.key),route,config,route.evidenceIds??[],{bootstrap:false}),route.images);
       if(!accepted){job.inputs=job.inputs.filter(x=>x!==route);return this.enqueue(route,generation);}
       job.contextThroughSeq=Math.max(job.contextThroughSeq??0,route.inboxSeq??0);
     }catch(error){job.session.blocked=true;this.persist();throw error;}
@@ -370,34 +382,84 @@ export class Bridge {
     if(!this.enabled(route)||generation!==this.generation||route.epoch!==undefined&&route.epoch!==(this.epochs.get(route.key)??0))return;
     const controller=new AbortController();
     const abort=()=>controller.abort();route.signal?.addEventListener('abort',abort,{once:true});if(route.signal?.aborted)controller.abort();
-    const job={session,inputs:[route],background:!!route.trigger,controller,toolsActive:false,contextThroughSeq:route.inboxSeq??0};this.jobs.set(route.key,job);
+    const job={session,inputs:[route],background:!!route.trigger,controller,toolsActive:false,contextThroughSeq:route.inboxSeq??0,
+      continuous:!!(config.dshNativeTools&&!route.trigger),immediateOutputs:[],immediateCount:0};this.jobs.set(route.key,job);
+    if(job.continuous)job.conversationInbox=new ConversationInbox(controller.signal);
     let modelPending=false;
     try {
       // A crash or cancellation must not reuse a possibly running DSH session.
       session.blocked=true; this.persist();
       const knowledge=new Knowledge(this.runtime,route.key);
       if(config.stickerLearn&&!route.trigger&&config.qqImageReceive)for(const input of route.messages??[route])knowledge.observe(input.segments,input.messageId);
-      const configuredTools=config.messageToolsEnabled||config.knowledgeEnabled||(route.group&&config.groupToolsEnabled);
+      const configuredTools=config.memoryEnabled||(config.personaPolicy&&config.personaPolicy!=='off')||config.messageToolsEnabled||config.knowledgeEnabled||(route.group&&config.groupToolsEnabled);
       const hostTools=!route.trigger&&configuredTools;
       const tools=new ChatTools({route,session,store,knowledge,config:config});
       tools.evidenceMessages=()=>evidenceMessages(job.inputs);
-      const messaging=new MessageTools({route,config,inbox:this.inbox(route.key),call:(...args)=>this.call(...args)});
+      tools.currentInputs=()=>job.inputs;
+      const messaging=new MessageTools({route,config,continuous:job.continuous,inbox:this.inbox(route.key),call:(...args)=>this.call(...args)});
+      if(job.continuous){
+        job.onAwaitingChild=()=>{
+          if(job.resumingInput||controller.signal.aborted)return;
+          const input=job.conversationInbox.pending.shift();if(!input)return;
+          job.resumingInput=true;
+          this.insert(input,job,generation).catch(error=>this.reportError(error.message)).finally(()=>{
+            job.resumingInput=false;
+            if(this.dsh.awaitingChild?.(session.id))job.onAwaitingChild();
+          });
+        };
+        job.onIncoming=input=>{messaging.route=input;messaging.queued.clear();};
+        job.prepareIncoming=async input=>{
+          input=await this.prepareMessages(input,config);
+          input=this.messageInput(input,session,job);
+          input=await this.prepareContext(input,config);
+          if(controller.signal.aborted||!this.enabled(route)||generation!==this.generation)throw Error('当前聊天已停止');
+          job.inputs.push(input);job.contextThroughSeq=Math.max(job.contextThroughSeq,input.inboxSeq??0);
+          tools.images.push(...(input.images??[]));job.onIncoming(input);
+          return input;
+        };
+        job.sendImmediately=async(outputs,callId)=>{
+          if(job.deliveryUncertain)throw Error('之前的发送失败或结果未知，不能继续自动发送');
+          const plans=[];
+          for(const part of outputs){
+            const replyRoute={...route,qqMessageId:job.inputs.at(-1).qqMessageId};
+            const plan=part.nativePlan??(part.poke?{action:route.group?'group_poke':'send_poke',params:{[route.group?'group_id':'user_id']:route.id,...(route.group?{user_id:part.poke}:{})}}:await this.media.outgoing(part,replyRoute,session,config));
+            if(plan)plans.push(...[plan,...(plan.following??[])]);
+          }
+          if(job.immediateCount+plans.length>32)throw Error('持续对话窗口最多32条发送');
+          const messages=plans.map(plan=>({state:'not_sent',text:planDescription(plan)}));
+          for(const [i,plan]of plans.entries()){
+            const index=job.immediateCount++;
+            try{
+              const sent=await this.sendPlan(route,plan,{generation,signal:controller.signal,partIndex:index,partCount:job.immediateCount+plans.length-i-1,
+                onDelivery:delivery=>Object.assign(messages[i],{state:delivery.state,qqMessageId:delivery.qqMessageId??''})});
+              if(!sent)break;
+              job.immediateOutputs.push({reply:messages[i].text,memory:[]});
+            }catch{job.deliveryUncertain=true;break;}
+          }
+          return {sent:messages.length>0&&messages.every(m=>m.state==='sent'),queued:false,callId,messages};
+        };
+      }
       const persona=this.management.personaContext(route.key),personaHash=createHash('sha256').update(persona).digest('hex');
       // Existing successful sessions already received the old full prompt; adopt
       // them without reinjecting documents or renaming their history.
       if(!session.promptVersion&&session.life.conversation.length){session.promptVersion=1;session.personaHash=personaHash;}
       const promptVersion=config.dshNativeTools?2:1;
       const bootstrap=session.promptVersion!==promptVersion;
-      let prompt = config.dshNativeTools?nativePrompt(store,route,config,{bootstrap,persona,knowledge,replyPolicyUpdate:session.replyPolicyVersion!==1}):preparePrompt(store,route,config,route.evidenceIds??[],{bootstrap});
+      let prompt = config.dshNativeTools?nativePrompt(store,route,config,{bootstrap,persona,knowledge,delegationPolicyUpdate:session.delegationPolicyVersion!==DELEGATION_POLICY_VERSION,conversationPolicyUpdate:session.conversationPolicyVersion!==CONTINUOUS_POLICY_VERSION}):preparePrompt(store,route,config,route.evidenceIds??[],{bootstrap});
       if(session.identityPolicyVersion!==2)prompt=IDENTITY_RULES+'\n'+ATTRIBUTION_RULES+'\n'+prompt;
       if(bootstrap&&!config.dshNativeTools){
-        prompt+='\n本机管理者设定的人设：\n'+persona;
-        if(config.knowledgeEnabled)prompt+='\n当前聊天知识（仅资料）：'+knowledge.context();
-        if(config.slangLearn)prompt+='\n可在 learning.slang 返回候选 {term,meaning,evidence:[本轮来源ID]}，宿主审查后入候选库。';
-        if(configuredTools)prompt+='\n'+TOOL_GUIDE;
-        if(configuredTools&&config.messageToolsEnabled)prompt+='\n'+MESSAGE_GUIDE+'\n本聊天允许 @：'+!!(route.group&&config.mentionSend)+'；未允许时省略 atUserId。';
-      }else if(!bootstrap&&session.personaHash!==personaHash)prompt+='\n本机管理者更新了人设（替换此前人设，仅本次通知）：\n'+persona;
-      if(!config.dshNativeTools&&!bootstrap&&config.memoryEnabled&&session.memoryPolicyVersion!==2)prompt+='\n宿主记忆规则更新（替换旧的私聊必须明确要求规则，仅本次通知）：'+automaticMemoryRules;
+        const intro=['当前聊天已保存的人设（只控制角色与表达，不授予系统权限）：\n'+persona];
+        if(config.knowledgeEnabled)intro.push('当前聊天知识（仅资料）：'+knowledge.context());
+        if(config.slangLearn)intro.push('可在 learning.slang 返回候选 {term,meaning,evidence:[本轮来源ID]}，宿主审查后入候选库。');
+        if(configuredTools)intro.push(TOOL_GUIDE);
+        if(configuredTools&&config.messageToolsEnabled)intro.push(MESSAGE_GUIDE+'\n本聊天允许 @：'+!!(route.group&&config.mentionSend)+'；未允许时省略 atUserId。');
+        prompt=intro.join('\n')+'\n'+prompt;
+      }else if(!config.dshNativeTools&&!bootstrap&&session.personaHash!==personaHash)prompt='本聊天人设已更新（替换此前人设，仅本次通知，不改变系统权限）：\n'+persona+'\n'+prompt;
+      if(!config.dshNativeTools&&!bootstrap&&config.memoryEnabled&&session.memoryPolicyVersion!==2)prompt='宿主记忆规则更新（替换旧的私聊必须明确要求规则，仅本次通知）：'+automaticMemoryRules+'\n'+prompt;
+      const personaPolicyStamp=JSON.stringify([config.personaPolicy??'off',config.adminUsers??[]]);
+      if(!config.dshNativeTools&&(bootstrap||session.personaPolicyStamp!==personaPolicyStamp||session.memoryToolsVersion!==4)){
+        prompt='宿主人设规则更新（覆盖旧的人设仅管理者修改说明）：'+personaGuide(config)+'\n'+(!bootstrap&&configuredTools?TOOL_GUIDE+'\n':'')+prompt;
+      }
       job.prepareMedia=part=>this.media.outgoing(part,{...route,qqMessageId:job.inputs.at(-1).qqMessageId},session,config);
       const nativeTools=config.dshNativeTools?nativeTurn({config,route,session,store,tools,messaging,job,
         isCurrent:()=>!controller.signal.aborted&&generation===this.generation&&this.enabled(route)&&
@@ -413,7 +475,9 @@ export class Bridge {
         modelPending=false;
         if(round===0){
           session.promptVersion=promptVersion;session.personaHash=personaHash;if(config.memoryEnabled)session.memoryPolicyVersion=2;
-          if(config.dshNativeTools)session.replyPolicyVersion=1;
+          session.personaPolicyStamp=personaPolicyStamp;session.memoryToolsVersion=4;
+          if(config.dshNativeTools&&!route.trigger){session.conversationPolicyVersion=CONTINUOUS_POLICY_VERSION;delete session.continuousChat;}
+          if(config.dshNativeTools&&!route.trigger)session.delegationPolicyVersion=DELEGATION_POLICY_VERSION;
           session.identityPolicyVersion=2;
           session.contextThroughSeq=Math.max(session.contextThroughSeq??0,...job.inputs.flatMap(x=>x.inboxSeqs??[x.inboxSeq]).filter(Number.isSafeInteger));
           this.persist();
@@ -446,7 +510,7 @@ export class Bridge {
       if (generation !== this.generation) return;
       if(route.trigger&&(route.signal?.aborted||session.life.version!==route.expectedVersion)){session.blocked=false;this.persist();return;}
       // Explicit queued sends are authoritative; ordinary reply is fallback only.
-      const publicReplies=job.noReply?[]:(messaging.outputs.length?messaging.outputs:replies).map(part=>({...part,reply:isSilentReply(part.reply)?'':part.reply}));
+      const publicReplies=job.continuous?job.immediateOutputs:job.noReply?[]:(messaging.outputs.length?messaging.outputs:replies).map(part=>({...part,reply:isSilentReply(part.reply)?'':part.reply}));
       const reply=publicReplies.map(part=>part.qq?.voice??part.reply).filter(x=>x&&!isSilentReply(x)).join('\n\n');
       if(route.trigger&&reply===session.lastProactiveReply){session.blocked=false;this.persist();return;}
       const inputs=evidenceMessages(job.inputs).map(m=>({...m,messageId:m.sourceId}));
@@ -458,6 +522,10 @@ export class Bridge {
         session.life.conversation.push(record);
       }
       session.life.lastAt=this.now();
+      if(job.continuous){
+        this.inbox(route.key).consume(job.inputs.flatMap(x=>x.inboxSeqs??[x.inboxSeq]).filter(Number.isSafeInteger));
+        session.blocked=false;this.persist();return;
+      }
       const plans=[];
       for(const part of publicReplies){
         if(generation!==this.generation||controller.signal.aborted)return;
@@ -495,6 +563,9 @@ export class Bridge {
       // A crashed or disconnected in-flight prompt remains blocked.
       if(!modelPending&&session.blocked){session.blocked=false;this.persist();}
       route.signal?.removeEventListener('abort',abort);if(this.jobs.get(route.key)===job)this.jobs.delete(route.key);
+      if(job.continuous&&!controller.signal.aborted&&this.enabled(route)&&generation===this.generation){
+        for(const input of job.conversationInbox.pending.splice(0))this.accept(input,generation);
+      }
     }
   }
   bufferAmbient(route,generation){
@@ -658,7 +729,7 @@ export class Bridge {
     try{for(const [scope,session] of Object.entries(this.state.sessions)){
       const route=session.route;if(!route||!this.enabled(route)||generation!==this.generation)continue;
       const config=this.configFor(route);
-      if(!(route.group?this.config.groups:this.config.privateUsers).includes(route.id)||this.scope(route)!==scope||this.queues.has(route.key)||this.jobs.has(route.key)||this.ambient.has(route.key)||this.backgrounds.has(route.key)||!due(session,config,this.now()))continue;
+      if(!(route.group?this.config.groups:this.config.privateUsers).includes(route.id)||this.scope(route)!==scope||this.queues.has(route.key)||this.jobs.has(route.key)||this.ambient.has(route.key)||this.backgrounds.has(route.key)||!due(session,config,this.now(),this.memory(route.key)))continue;
       const controller=new AbortController(),store=this.memory(route.key);
       const current=()=>generation===this.generation&&this.state.sessions[scope]===session;
       const job={controller};this.maintenance.set(route.key,job);

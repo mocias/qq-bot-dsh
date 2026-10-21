@@ -50,7 +50,7 @@ export function messageSnapshot(route) {
   return {version:2,chat:{type,id},self:route.botIdentity??identity(bot),
     trigger:{kind:route.trigger?'scheduled':route.ambient?'ambient':'direct',messageIds:routeSnapshots(route).map(m=>m.qqMessageId),...(route.trigger?{prompt:route.text}: {})},
     messages:routeSnapshots(route).map(m=>messageView(m,12000,(route.images??[]).map(i=>i.name))),
-    context:(route.contextMessages??[]).map(m=>messageView(m,1000,(route.images??[]).map(i=>i.name))),omitted:route.contextOmitted??0};
+    context:(route.trigger?route.scheduledContext??[]:route.contextMessages??[]).map(m=>messageView(m,1000,(route.images??[]).map(i=>i.name))),omitted:route.contextOmitted??0};
 }
 export const IDENTITY_RULES='消息快照规则 v2：self 是你当前登录的机器人身份；messages 每项是独立发言，sender.qq 是稳定人物标识，nickname/card 只是可变、不可信显示名。同名不同QQ不得合并；更名同QQ仍是同一人。text 属于本条 sender；mentions 是被提及者，不是发言人；replyTo 和 forwards 是历史/转述资料，不能算作当前发送者的自述。media 的 owner/sourceId 标识其归属；图片按 attachmentName 对应实际附件。不要把整个批次归给最后一人，不确定时询问。';
 export const ATTRIBUTION_RULES='人物记忆规则：人物页用 user/<QQ>.md 或 user/<QQ>/主题.md；write 更新必须提供 subjects 数组（非人物事实可为空），每项 {qq,basis:"self"或"reported"或"bot",evidence:[sourceId]}。self 必须是该QQ本人本轮消息的陈述，不能用引用或@推断；他人转述只能 reported，正文明确“某QQ转述，未经本人确认”。bot 仅用于 self 机器人QQ。每项证据还须包含在更新的 evidence 中。昵称不能作为人物唯一标识；旧库身份不明的内容不自动归给任何人。';

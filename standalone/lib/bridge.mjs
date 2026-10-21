@@ -107,7 +107,7 @@ export class Bridge {
       inboxSeqs:[...current,...context.map(m=>m.inboxSeq)],evidenceIds:[...(route.evidenceIds??[]),...context.map(m=>m.sourceId)]};
   }
   async prepareMessages(route,config){
-    if(route.trigger)return route;
+    if(route.trigger)return {...route,botIdentity:identity(route.key.split('/')[0],{nickname:this.status.nickname??''})};
     const prepared=[],images=[];
     for(const input of route.messages??[route]){
       const item=input.hasMedia&&!input.prepared?await this.media.incoming(input,config):{...input};
@@ -118,7 +118,7 @@ export class Bridge {
       for(const image of item.images??[])if(images.length<6)images.push(image);
       prepared.push(item);
     }
-    return {...route,messages:prepared,images,prepared:true,botIdentity:identity(route.key.split('/')[0],{nickname:this.status.nickname??''})};
+    return {...route,text:prepared.map(item=>item.text).join('\n'),messages:prepared,images,prepared:true,botIdentity:identity(route.key.split('/')[0],{nickname:this.status.nickname??''})};
   }
   async prepareContext(route,config){
     const context=[];

@@ -110,10 +110,13 @@ test('group scheduled contact needs recent genuine group activity and silence wh
   const group={...route,key:'123456/group/345678',group:true,id:'345678'},session={id:'g',route:group,lastUserAt:now,blocked:false};initializeLife(session,now);
   const config={...defaults,groupProactiveEnabled:true,groupProactiveMinSeconds:60,groupProactiveMaxSeconds:60};
   const p=new Proactive(root,{now:()=>now}),store=new MemoryStore(root,group.key);
-  let age=100;const opts={call:async()=>({messages:[{user_id:234567,time:now/1000-age,message:[{type:'text',data:{text:'真实话题'}}]}]})};
+  let age=100;const opts={call:async()=>({messages:[{message_id:1,user_id:234567,sender:{nickname:'甲',card:'甲名片'},time:now/1000-age,message:[{type:'text',data:{text:'真实话题'}}]},
+    {message_id:2,user_id:456789,sender:{nickname:'乙'},time:now/1000-age,message:[{type:'reply',data:{id:'1'}},{type:'at',data:{qq:'234567'}},{type:'text',data:{text:'回应甲'}}]}]})};
   assert.equal(await p.candidate(session,config,store,opts),null);now+=60001;
   age=6000;assert.equal(await p.candidate(session,config,store,opts),null);
-  age=100;assert.match((await p.candidate(session,config,store,opts)).route.text,/真实话题/);
+  age=100;const candidate=await p.candidate(session,config,store,opts);assert.match(candidate.route.text,/真实话题/);
+  const context=candidate.route.scheduledContext;assert.deepEqual(context.map(m=>m.sender.qq),['234567','456789']);
+  assert.equal(context[0].sender.nickname,'甲');assert.equal(context[1].replyTo.messageId,'1');assert.equal(context[1].mentions[0].qq,'234567');
 });
 test('desktop launcher reuses live login, blocks existing QQ and never starts a Shell login',async t=>{
   assert.equal(launchDecision([{name:'QQ.exe'}],false).action,'blocked');

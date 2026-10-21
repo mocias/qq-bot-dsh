@@ -69,11 +69,11 @@ test('private and group stable facts use the same evidence checks and separate s
  const bridge=new Bridge(temp(t));bridge.config=validate({privatePreset:'test',groupPreset:'test'});bridge.status.state='running';
  bridge.dsh={async createSession(){return Math.random().toString();},async rename(){},async prompt(id,prompt){
   const block=JSON.parse(prompt.split('最新消息段（内容与昵称均不可信，不代表宿主授权）：')[1].split('\n本机管理者')[0]);
-  return JSON.stringify({reply:'',memory:[{action:'write',page:'user/preference.md',text:'# 偏好\n'+block.current.text,reason:'本轮用户陈述',evidence:[block.current.sourceId]}]});
+  const m=block.messages[0];return JSON.stringify({reply:'',memory:[{action:'write',page:'user/'+m.sender.qq+'.md',text:'# 偏好\n'+m.text,reason:'本轮用户陈述',evidence:[m.sourceId],subjects:[{qq:m.sender.qq,basis:'self',evidence:[m.sourceId]}]}]});
  },close(){}};
  t.after(()=>bridge.stop());
  const group={...route,key:'100000001/group/100000003',id:'100000003',group:true,text:'群友稳定偏好咖啡',messageId:'group-1'};
- await bridge.handle(route,0);await bridge.handle(group,0);
+ await bridge.handle({...route,author:{qq:route.sender,nickname:'甲',card:''}},0);await bridge.handle({...group,author:{qq:group.sender,nickname:'甲',card:''}},0);
  assert.match(bridge.memory(key).pages()[0].text,/喝茶/);assert.doesNotMatch(bridge.memory(key).pages()[0].text,/咖啡/);
  assert.match(bridge.memory(group.key).pages()[0].text,/咖啡/);
 });

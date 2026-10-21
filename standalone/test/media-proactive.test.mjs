@@ -180,9 +180,9 @@ test('new user input cancels proactive work, preserves memory and suppresses the
 test('ordinary private chat can remember grounded preferences while proactive turns cannot write',async t=>{
   const root=temp(t),sent=[],b=new Bridge(root);
   b.config={...defaults,privatePreset:'chat'};b.status.state='running';
-  b.dsh={rename:async()=>{},createSession:async()=> 's',prompt:async()=>JSON.stringify({reply:'你好呀',memory:[{action:'write',page:'user/preference.md',text:'# 偏好\n喜欢茶',reason:'用户明确陈述偏好',evidence:[route.messageId]}]})};
+  b.dsh={rename:async()=>{},createSession:async()=> 's',prompt:async()=>JSON.stringify({reply:'你好呀',memory:[{action:'write',page:'user/'+route.id+'.md',text:'# 偏好\n喜欢茶',reason:'用户明确陈述偏好',evidence:[route.messageId],subjects:[{qq:route.id,basis:'self',evidence:[route.messageId]}]}]})};
   b.socket={send(bytes){const frame=JSON.parse(bytes);sent.push(frame);queueMicrotask(()=>{b.pending.get(frame.echo)?.({status:'ok',retcode:0,data:{message_id:sent.length}});b.pending.delete(frame.echo);});}};
-  await b.handle({...route,text:'我一直很喜欢喝茶'},b.generation);
+  await b.handle({...route,author:{qq:route.id,nickname:'甲',card:''},text:'我一直很喜欢喝茶'},b.generation);
   const session=b.state.sessions[b.scope(route)];
   assert.equal(b.memory(key).pages().some(p=>p.text.includes('喜欢茶')),true);
   b.dsh.prompt=async()=>JSON.stringify({reply:'你好呀',memory:[{action:'write',page:'user/proactive.md',text:'# 不应保存',reason:'主动猜测',evidence:['scheduled']}]});

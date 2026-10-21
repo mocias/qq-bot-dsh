@@ -1,6 +1,7 @@
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {readJson,writeJson} from './config.mjs';
+import {inboxSnapshot,messageView} from './message-snapshot.mjs';
 
 // Protocol/behavior adapted from Derpyu520/qq-bridge; see docs/QQ-CHAT-0.12.md.
 // Local IDs are cursors, never substitutes for real OneBot message IDs.
@@ -16,12 +17,16 @@ export class ChatInbox {
     return s;
   }
   save(s){writeJson(this.file,s);}
-  append({messageId,sourceId,sender,text,replyTo,kind='message',outgoing=false}){
+  append({messageId,sourceId,sender,text,replyTo,snapshot,segments,kind='message',outgoing=false}){
     const s=this.read(),existing=s.messages.find(m=>m.sourceId===sourceId);
     if(existing)return existing;
     const item={seq:s.next++,messageId:messageId==null?null:String(messageId),sourceId,
-      sender:String(sender??''),text:String(text??'').slice(0,12000),replyTo:replyTo==null?null:String(replyTo),kind,outgoing,at:this.now()};
+      sender:String(sender??''),text:String(text??''),replyTo:replyTo==null?null:String(replyTo),snapshot,segments,kind,outgoing,at:this.now()};
     s.messages.push(item);s.messages=s.messages.slice(-500);this.save(s);return item;
+  }
+  enrich(sourceId,snapshot){
+    const s=this.read(),row=s.messages.find(m=>m.sourceId===sourceId);if(!row)return;
+    row.snapshot={...snapshot,inboxSeq:row.seq};this.save(s);
   }
   list({unread=false,mine=false,limit=20,offset=0,afterSeq}={}){
     if(!Number.isInteger(limit)||limit<1||limit>100||!Number.isInteger(offset)||offset<0||offset>500
@@ -33,7 +38,8 @@ export class ChatInbox {
     rows=chronological?rows.slice(offset,offset+limit):rows.slice().reverse().slice(offset,offset+limit);
     const bounded=[];let size=0;
     for(const row of rows){
-      const item={...row,text:row.text.slice(0,1000),textTruncated:row.text.length>1000};
+      const {segments,snapshot,...meta}=row;
+      const item={...meta,...messageView(inboxSnapshot(row),1000)};
       const length=JSON.stringify(item).length;if(size+length>6000)break;
       size+=length;bounded.push(item);
     }

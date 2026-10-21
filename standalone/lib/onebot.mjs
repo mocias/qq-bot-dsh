@@ -24,7 +24,7 @@ export async function verifyQQ(socket,config){
  if(config.botQQ&&account!==config.botQQ)throw Error(`QQ 登录账号不匹配：当前 ${account}，预期 ${config.botQQ}`);
  const status=await callOneBot(socket,'get_status');
  if(status?.online!==true||status?.good===false)throw Error('QQ 尚未登录或当前离线');
- return {account,online:true,verifiedAt:new Date().toISOString()};
+ return {account,nickname:String(login.nickname??''),online:true,verifiedAt:new Date().toISOString()};
 }
 export async function probeQQ(config){
  const url=localUrl(config.qqUrl,['ws:','wss:']);

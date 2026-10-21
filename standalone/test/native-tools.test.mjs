@@ -75,7 +75,7 @@ async function harness(t,respond){
 function bridgeFixture(t,config,client,{group=false}={}){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'qq-native-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
-  const bridge=new Bridge(root,{wait:async()=>{}}),route={key:`100000001/${group?'group':'private'}/100000002`,id:'100000002',group,text:'记住我喜欢茶',messageId:'m1',qqMessageId:'1'};
+  const bridge=new Bridge(root,{wait:async()=>{}}),route={key:`100000001/${group?'group':'private'}/100000002`,id:'100000002',group,text:'记住我喜欢茶',messageId:'m1',qqMessageId:'1',sender:'100000002',author:{qq:'100000002',nickname:'甲',card:''}};
   bridge.config=config;bridge.status.state='running';bridge.dsh=client;
   const session={id:'session',transport:'native-v1',route,workspace:root,preset:'test',blocked:false};
   initializeLife(session);bridge.state.sessions[bridge.scope(route)]=session;
@@ -86,7 +86,7 @@ const text=sent=>sent.map(x=>x.params.message.filter(m=>m.type==='text').map(m=>
 test('native DSH request calls a real host memory tool and returns ordinary text without the JSON loop',async t=>{
   const h=await harness(t,async({call,message})=>{
     assert.equal(message.source.kind,'plugin:qq-rsi-native');
-    const result=await call('qq_memory_update',{updates:[{action:'write',page:'user/tea.md',text:'# 茶\n喜欢茶',reason:'本轮用户陈述',evidence:['m1']}]});
+    const result=await call('qq_memory_update',{updates:[{action:'write',page:'user/100000002.md',text:'# 茶\n喜欢茶',reason:'本轮用户陈述',evidence:['m1'],subjects:[{qq:'100000002',basis:'self',evidence:['m1']}]}]});
     assert.equal(result.result.saved,true);
     return ['我记住你喜欢茶了。','后续回复可以直接用自然语言。'];
   });
@@ -111,7 +111,7 @@ test('provider reuse of a tool call ID in a later conversation turn does not dis
   let round=0;
   const h=await harness(t,async({call})=>{
     round++;
-    await call('qq_memory_update',{updates:[{action:'write',page:'user/tea.md',text:'# 偏好\n'+(round===1?'茶':'咖啡'),reason:'当前陈述',evidence:['m'+round]}]},'reused-call-id');
+    await call('qq_memory_update',{updates:[{action:'write',page:'user/100000002.md',text:'# 偏好\n'+(round===1?'茶':'咖啡'),reason:'当前陈述',evidence:['m'+round],subjects:[{qq:'100000002',basis:'self',evidence:['m'+round]}]}]},'reused-call-id');
     return '保存成功';
   });
   const f=bridgeFixture(t,h.config,h.client);

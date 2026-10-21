@@ -22,6 +22,7 @@ import {ChatInbox,Participation} from './chat-inbox.mjs';
 import {MessageTools,MESSAGE_GUIDE} from './message-tools.mjs';
 import {nativePrompt,nativeTurn} from './native-turn.mjs';
 import {isSilentReply,planDescription} from './reply-control.mjs';
+import {identity,snapshotOf,routeSnapshots,inboxSnapshot,messageView,evidenceMessages,IDENTITY_RULES,ATTRIBUTION_RULES} from './message-snapshot.mjs';
 
 const pause=(ms,signal)=>new Promise(resolve=>{
   if(signal.aborted)return resolve();
@@ -47,8 +48,9 @@ export function routeMessage(event, config, observe=false) {
   if(group&&!direct&&!replyId&&!config.groupAmbientEnabled&&!observe)return null;
   const hasMedia=event.message.some(x=>(x?.type==='image'&&config.qqImageReceive)||(x?.type==='record'&&config.qqVoiceReceive)||(x?.type==='forward'&&config.qqForwardReceive)||['reply','face','json','xml','poke'].includes(x?.type)||(['file','video'].includes(x?.type)&&config.qqFileReceive));
   const text = event.message.filter(x => x?.type === 'text').map(x => String(x.data?.text || '')).join('').trim()||(hasMedia?'[QQ 多媒体消息]':'');
-  if (!text || text.length > 12000) return null;
-  return { key: `${event.self_id}/${group ? 'group' : 'private'}/${id}`, id, group, text,requestText:text,
+  if (!text) return null;
+  return { key: `${event.self_id}/${group ? 'group' : 'private'}/${id}`, id, group, text,requestText:event.message.filter(x=>x?.type==='text').map(x=>String(x.data?.text??'')).join(''),
+    author:identity(event.user_id,event.sender),time:Number.isFinite(event.time)?event.time*1000:null,receivedAt:Date.now(),
     qqMessageId:String(event.message_id),ambient:group&&!direct&&!replyId,needsReplyCheck:group&&!direct&&!!replyId,replyId,sender: String(event.user_id),segments:event.message,hasMedia, messageId: `${event.self_id}/${group ? 'group' : 'private'}/${id}/${event.message_id}` };
 }
 export class Bridge {
@@ -98,11 +100,47 @@ export class Bridge {
     const rows=state.messages.filter(m=>!m.outgoing&&!m.read&&m.seq>state.readThrough&&m.seq>floor&&m.seq<route.inboxSeq&&!current.has(m.seq));
     const context=[];let size=0;
     for(const m of rows.slice(-20).reverse()){
-      const item={sourceId:m.sourceId,qqMessageId:m.messageId,inboxSeq:m.seq,sender:m.sender,text:m.text.slice(0,1000),textTruncated:m.text.length>1000,at:m.at};
-      const length=JSON.stringify(item).length;if(size+length>12000)break;size+=length;context.unshift(item);
+      const item=inboxSnapshot(m);
+      const length=JSON.stringify(messageView(item,1000)).length;if(size+length>12000)break;size+=length;context.unshift(item);
     }
     return {...route,contextMessages:context,contextOmitted:rows.length-context.length,
       inboxSeqs:[...current,...context.map(m=>m.inboxSeq)],evidenceIds:[...(route.evidenceIds??[]),...context.map(m=>m.sourceId)]};
+  }
+  async prepareMessages(route,config){
+    if(route.trigger)return route;
+    const prepared=[],images=[];
+    for(const input of route.messages??[route]){
+      const item=input.hasMedia&&!input.prepared?await this.media.incoming(input,config):{...input};
+      item.snapshot=snapshotOf(item);item.snapshot.inboxSeq=item.inboxSeq??null;
+      this.inbox(route.key).enrich(item.messageId,item.snapshot);
+      if(config.memoryEnabled)this.memory(route.key).record({id:'snapshot-v2-'+item.messageId,kind:'qq-snapshot',snapshot:item.snapshot});
+      // Each attachment carries a stable filename referenced by its own message.
+      for(const image of item.images??[])if(images.length<6)images.push(image);
+      prepared.push(item);
+    }
+    return {...route,messages:prepared,images,prepared:true,botIdentity:identity(route.key.split('/')[0],{nickname:this.status.nickname??''})};
+  }
+  async prepareContext(route,config){
+    const context=[];
+    for(const message of route.contextMessages??[]){
+      const row=this.inbox(route.key).read().messages.find(m=>m.sourceId===message.sourceId);
+      if(row?.segments?.some(s=>s.type!=='text'&&s.type!=='at')&&!row.snapshot?.expanded){
+        const prepared=await this.media.incoming({...route,messages:undefined,snapshot:message,messageId:message.sourceId,qqMessageId:message.qqMessageId,
+          sender:message.sender.qq,author:message.sender,requestText:message.text,text:message.text,segments:row.segments},config);
+        this.inbox(route.key).enrich(message.sourceId,prepared.snapshot);
+        context.push(prepared.snapshot);route.images.push(...(prepared.images??[]));
+        if(config.memoryEnabled)this.memory(route.key).record({id:'snapshot-v2-'+message.sourceId,kind:'qq-snapshot',snapshot:prepared.snapshot});
+      }else context.push(message);
+    }
+    route.contextMessages=context;
+    // Aggregate limits span all senders and historical references in the batch.
+    let bytes=0;
+    route.images=(route.images??[]).filter((image,index)=>{bytes+=Buffer.byteLength(image.data??'','base64');return index<6&&bytes<=24*1024*1024;});
+    const attached=new Set(route.images.map(i=>i.name));
+    const mark=m=>{for(const media of m.media??[])if(media.attachmentName&&!attached.has(media.attachmentName))media.status='stored_not_attached';
+      if(m.replyTo?.resolved)mark(m.replyTo);for(const child of m.forwards??[])mark(child);};
+    for(const message of route.messages??[]){message.snapshot??=snapshotOf(message);mark(message.snapshot);}for(const message of context)mark(message);
+    return route;
   }
   summary(){return Object.values(this.state.sessions).filter(s=>s.route).map(s=>({key:s.route.key,sessionId:s.id,title:s.title,workspace:s.workspace,permissionPreset:s.permissionPreset??'',blocked:s.blocked,
     compactions:s.life?.compactions.length??0,pendingCompactions:s.life?.compactions.filter(c=>!s.life.digestedIds.includes(c.id)).length??0,
@@ -226,9 +264,10 @@ export class Bridge {
     if(event._poke){route.qqMessageId=null;route.poke=true;}
     const effective=this.configFor(route);
     if(route.group||effective.messageToolsEnabled){
-      const item=this.inbox(route.key).append({messageId:route.qqMessageId,sourceId:route.messageId,sender:route.sender,text:route.text,replyTo:route.replyId,kind:route.poke?'poke':'message'});
+      const item=this.inbox(route.key).append({messageId:route.qqMessageId,sourceId:route.messageId,sender:route.sender,text:route.requestText??route.text,replyTo:route.replyId,snapshot:snapshotOf(route),segments:route.segments,kind:route.poke?'poke':'message'});
       route.inboxSeq=item.seq;
     }
+    if(effective.memoryEnabled)this.memory(route.key).record({id:route.messageId,kind:'qq-input',snapshot:snapshotOf(route),segments:route.segments});
     if(route.ambient&&!effective.groupAmbientEnabled){this.flow('input.mention_required',route);this.state.seen.push(route.messageId);this.persist();return;}
     if(!route.needsReplyCheck&&!this.participation(route.key).onInput(route,effective)){this.flow('input.diving',route);this.state.seen.push(route.messageId);this.persist();return;}
     this.systemLog?.record('message.accepted',{component:'qq'});
@@ -260,7 +299,7 @@ export class Bridge {
     this.state.lastActiveKey=route.key;
     this.backgrounds.get(route.key)?.abort();
     this.maintenance.get(route.key)?.controller.abort();
-    if(config.memoryEnabled)this.memory(route.key).record({id:route.messageId,kind:'qq-input',at:this.now(),sender:route.sender,text:route.text});
+    if(config.memoryEnabled)for(const input of route.messages??[route])this.memory(route.key).record({id:input.messageId,kind:'qq-input',snapshot:snapshotOf(input),segments:input.segments});
     this.persist(); this.status.active++;
     const job=this.jobs.get(route.key),policy=route.group?config.groupMessagePolicy:config.privateMessagePolicy;
     if(job?.sending&&!route.ambient)job.controller.abort();
@@ -270,7 +309,11 @@ export class Bridge {
   }
   async insert(route,job,generation){
     const config=this.configFor(route);
+    route=await this.prepareMessages(route,config);
     route=this.messageInput(route,job.session,job);
+    route=await this.prepareContext(route,config);
+    if(!this.enabled(route)||generation!==this.generation||route.epoch!==undefined&&route.epoch!==(this.epochs.get(route.key)??0))return;
+    if(route.images?.length)return this.enqueue(route,generation);
     job.inputs.push(route);
     try{
       const accepted=await this.dsh.steer(job.session.id,preparePrompt(this.memory(route.key),route,config,route.evidenceIds??[],{bootstrap:false}));
@@ -320,9 +363,11 @@ export class Bridge {
     initializeLife(session,this.now());session.backend??=config.dshUrl;this.syncReminders();const store=this.memory(route.key);
     if(!route.trigger)session.lastUserAt=this.now();
     else if(session.life.version!==route.expectedVersion)return;
-    if(route.hasMedia&&!route.prepared)route=await this.media.incoming(route,config);
+    route=await this.prepareMessages(route,config);
     if (!this.enabled(route)||generation !== this.generation||route.epoch!==undefined&&route.epoch!==(this.epochs.get(route.key)??0)) return;
     route=this.messageInput(route,session);
+    route=await this.prepareContext(route,config);
+    if(!this.enabled(route)||generation!==this.generation||route.epoch!==undefined&&route.epoch!==(this.epochs.get(route.key)??0))return;
     const controller=new AbortController();
     const abort=()=>controller.abort();route.signal?.addEventListener('abort',abort,{once:true});if(route.signal?.aborted)controller.abort();
     const job={session,inputs:[route],background:!!route.trigger,controller,toolsActive:false,contextThroughSeq:route.inboxSeq??0};this.jobs.set(route.key,job);
@@ -331,10 +376,11 @@ export class Bridge {
       // A crash or cancellation must not reuse a possibly running DSH session.
       session.blocked=true; this.persist();
       const knowledge=new Knowledge(this.runtime,route.key);
-      if(config.stickerLearn&&!route.trigger&&config.qqImageReceive)knowledge.observe(route.segments,route.messageId);
+      if(config.stickerLearn&&!route.trigger&&config.qqImageReceive)for(const input of route.messages??[route])knowledge.observe(input.segments,input.messageId);
       const configuredTools=config.messageToolsEnabled||config.knowledgeEnabled||(route.group&&config.groupToolsEnabled);
       const hostTools=!route.trigger&&configuredTools;
       const tools=new ChatTools({route,session,store,knowledge,config:config});
+      tools.evidenceMessages=()=>evidenceMessages(job.inputs);
       const messaging=new MessageTools({route,config,inbox:this.inbox(route.key),call:(...args)=>this.call(...args)});
       const persona=this.management.personaContext(route.key),personaHash=createHash('sha256').update(persona).digest('hex');
       // Existing successful sessions already received the old full prompt; adopt
@@ -343,6 +389,7 @@ export class Bridge {
       const promptVersion=config.dshNativeTools?2:1;
       const bootstrap=session.promptVersion!==promptVersion;
       let prompt = config.dshNativeTools?nativePrompt(store,route,config,{bootstrap,persona,knowledge,replyPolicyUpdate:session.replyPolicyVersion!==1}):preparePrompt(store,route,config,route.evidenceIds??[],{bootstrap});
+      if(session.identityPolicyVersion!==2)prompt=IDENTITY_RULES+'\n'+ATTRIBUTION_RULES+'\n'+prompt;
       if(bootstrap&&!config.dshNativeTools){
         prompt+='\n本机管理者设定的人设：\n'+persona;
         if(config.knowledgeEnabled)prompt+='\n当前聊天知识（仅资料）：'+knowledge.context();
@@ -367,6 +414,7 @@ export class Bridge {
         if(round===0){
           session.promptVersion=promptVersion;session.personaHash=personaHash;if(config.memoryEnabled)session.memoryPolicyVersion=2;
           if(config.dshNativeTools)session.replyPolicyVersion=1;
+          session.identityPolicyVersion=2;
           session.contextThroughSeq=Math.max(session.contextThroughSeq??0,...job.inputs.flatMap(x=>x.inboxSeqs??[x.inboxSeq]).filter(Number.isSafeInteger));
           this.persist();
           this.flow(bootstrap?'context.initialized':'context.messages',route,{count:job.inputs.reduce((n,x)=>n+1+(x.contextMessages?.length??0),0)});
@@ -401,11 +449,11 @@ export class Bridge {
       const publicReplies=job.noReply?[]:(messaging.outputs.length?messaging.outputs:replies).map(part=>({...part,reply:isSilentReply(part.reply)?'':part.reply}));
       const reply=publicReplies.map(part=>part.qq?.voice??part.reply).filter(x=>x&&!isSilentReply(x)).join('\n\n');
       if(route.trigger&&reply===session.lastProactiveReply){session.blocked=false;this.persist();return;}
-      const inputs=job.inputs.flatMap(x=>[...(x.contextMessages??[]).map(m=>({messageId:m.sourceId,sender:m.sender,text:m.text})),{messageId:x.messageId,sender:x.sender,text:x.text}]);
+      const inputs=evidenceMessages(job.inputs).map(m=>({...m,messageId:m.sourceId}));
       if(config.memoryEnabled&&!route.trigger){
         // Both chat kinds can propose grounded facts; proactive prompts never
         // enter this branch. The host still validates evidence and page scope.
-        for(const [index,part] of replies.entries())if(part.memory.length)store.commit(part.memory,{id:'remember-'+route.messageId+(index?'/part-'+index:''),evidenceIds:job.inputs.flatMap(x=>[x.messageId,...(x.evidenceIds??[])]),summary:'本聊天有来源的稳定事实与偏好'});
+        for(const [index,part] of replies.entries())if(part.memory.length)store.commit(part.memory,{id:'remember-'+route.messageId+(index?'/part-'+index:''),evidenceIds:job.inputs.flatMap(x=>[x.messageId,...(x.evidenceIds??[])]),evidenceMessages:inputs,summary:'本聊天有来源的稳定事实与偏好'});
         const record={id:'turn-'+session.id+'-'+route.messageId,inputs,reply,at:this.now()};store.record({kind:'conversation',...record});
         session.life.conversation.push(record);
       }
@@ -463,9 +511,9 @@ export class Bridge {
       this.flow('ambient.submitted',route,{count:entry.routes.length});
       this.ambientAttempts[route.key]=this.now();this.persist();
       const routes=entry.routes,lastRoute=routes.at(-1);
-      this.accept({...lastRoute,text:routes.map(r=>r.sender+': '+r.text).join('\n').slice(-12000),segments:routes.flatMap(r=>r.segments).slice(0,100),inboxSeqs:routes.map(r=>r.inboxSeq),evidenceIds:routes.map(r=>r.messageId)},generation);
+      this.accept({...lastRoute,messages:routes,hasMedia:routes.some(r=>r.hasMedia),text:routes.map(r=>r.text).join('\n'),inboxSeqs:routes.map(r=>r.inboxSeq),evidenceIds:routes.map(r=>r.messageId)},generation);
     },config.groupAmbientDelaySeconds*1000);entry.timer.unref?.();}
-    if(config.memoryEnabled)this.memory(route.key).record({id:route.messageId,kind:'qq-input',at:this.now(),sender:route.sender,text:route.text});
+    if(config.memoryEnabled)this.memory(route.key).record({id:route.messageId,kind:'qq-input',snapshot:snapshotOf(route),segments:route.segments});
     entry.routes.push(route);entry.routes=entry.routes.slice(-20);
   }
   async command(route,match,generation){
@@ -539,8 +587,13 @@ export class Bridge {
       this.state.deliveries.push(delivery);this.persist();
       try{
         const result=await this.call(plan.action,plan.params);delivery.state='sent';delivery.qqMessageId=String(result?.message_id??'');this.status.lastSentAt=new Date().toISOString();
-        if(config.messageToolsEnabled)this.inbox(route.key).append({messageId:delivery.qqMessageId||null,sourceId:'out/'+randomUUID(),sender:route.key.split('/')[0],outgoing:true,
-          text:(plan.params.message??[]).map(x=>x.type==='text'?x.data.text:'['+x.type+']').join('')||(plan.action.endsWith('_poke')?'[拍一拍]':'[附件或转发]'),kind:plan.action});
+        if(config.messageToolsEnabled){
+          const sourceId='out/'+randomUUID(),sender=route.key.split('/')[0],segments=plan.params.message??[];
+          const text=plan.transcript??segments.filter(x=>x.type==='text').map(x=>x.data.text).join('');
+          const snapshot=snapshotOf({messageId:sourceId,qqMessageId:delivery.qqMessageId,author:identity(sender,{nickname:this.status.nickname}),text,segments,
+            replyId:segments.find(x=>x.type==='reply')?.data?.id});
+          this.inbox(route.key).append({messageId:delivery.qqMessageId||null,sourceId,sender,outgoing:true,text,snapshot,kind:plan.action});
+        }
       }catch(error){if(delivery.state!=='sent')delivery.state=error.deliveryState??'unknown';throw Error('QQ 发送失败或结果不确定；为避免重复发送，不会自动重试');}
       finally{onDelivery?.(delivery);this.persist();this.systemLog?.record('message.'+delivery.state,{component:'qq',level:delivery.state==='sent'?'info':'error'});}
       return true;

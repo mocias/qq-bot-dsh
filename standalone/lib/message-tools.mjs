@@ -1,5 +1,6 @@
 import {wakeSeconds} from './timing.mjs';
 import {isSilentReply} from './reply-control.mjs';
+import {inboxSnapshot,messageView} from './message-snapshot.mjs';
 export const MESSAGE_GUIDE=`聊天工具（只作用于当前聊天）：
 qq_get_recent_messages {limit:20,offset:0}；qq_get_unread_messages {limit:20,afterSeq:0}；qq_get_my_recent_messages {limit:10}；qq_get_message_detail {messageId:"真实QQ消息ID"} 或 {seq:本地序号}。
 qq_mark_read {throughSeq:已展示的本地序号}；qq_social_state {}；qq_set_wake_config {mode:"active"或"diving",seconds:1800}（须启用潜水）。
@@ -24,7 +25,7 @@ export class MessageTools {
     if(!args||typeof args!=='object'||Array.isArray(args))throw Error('参数无效');
     const fields={
       qq_get_recent_messages:['limit','offset'],qq_get_unread_messages:['limit','afterSeq'],
-      qq_get_my_recent_messages:['limit','offset'],qq_get_message_detail:['messageId','seq'],
+      qq_get_my_recent_messages:['limit','offset'],qq_get_message_detail:['messageId','seq','textOffset'],
       qq_mark_read:['throughSeq'],qq_social_state:[],qq_set_wake_config:['mode','seconds','minutes'],
       qq_send_message:['messages','replyToMessageId','atUserId'],qq_reply:['message','replyToMessageId'],
       qq_send_poke:['targetUserId'],
@@ -41,7 +42,10 @@ export class MessageTools {
     if(tool==='qq_get_message_detail'){
       if((args.seq===undefined)===(args.messageId===undefined))throw Error('请选择消息ID或本地序号之一');
       // A single detail does not authorize skipping intervening unread messages.
-      const row=this.inbox.detail(args);return {...row,text:row.text.slice(0,4000),textTruncated:row.text.length>4000};
+      const row=this.inbox.detail(args),offset=args.textOffset??0,snapshot=inboxSnapshot(row);
+      if(!Number.isSafeInteger(offset)||offset<0||offset>snapshot.text.length)throw Error('原文读取位置无效');
+      return {...messageView(snapshot,4000),text:snapshot.text.slice(offset,offset+4000),seq:row.seq,messageId:row.messageId,
+        textOffset:offset,nextTextOffset:offset+4000<snapshot.text.length?offset+4000:null,textTruncated:offset>0||snapshot.text.length>4000,originalTextChars:snapshot.text.length};
     }
     if(['qq_get_recent_messages','qq_get_unread_messages','qq_get_my_recent_messages'].includes(tool)){
       const result=this.inbox.list({...args,unread:tool==='qq_get_unread_messages',mine:tool==='qq_get_my_recent_messages'});

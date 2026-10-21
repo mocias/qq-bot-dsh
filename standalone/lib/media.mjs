@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import {snapshotOf,identity} from './message-snapshot.mjs';
 import {isSilentReply} from './reply-control.mjs';
 import path from 'node:path';
 import http from 'node:http';
@@ -95,13 +96,17 @@ export class Media {
     }
   }
   async incoming(route,config){
-    const images=[],lines=[],failures=[];let count=0,characters=0,imageBytes=0;
-    const add=text=>{if(characters>=12000)return;const value=String(text).slice(0,12000-characters);lines.push(value);characters+=value.length;};
-    const walk=async(segments,depth=0)=>{
+    const images=[],lines=[],failures=[],snapshot=snapshotOf(route);let count=0,imageBytes=0;
+    const walk=async(segments,depth=0,scope=snapshot)=>{
       if(depth>4||!Array.isArray(segments))return;
-      for(const item of segments){
+      scope.media=[];scope.parts=[];
+      for(const [index,item] of segments.entries()){
+        const part={index,kind:item.type};scope.parts.push(part);
+        const add=text=>{const value=String(text);lines.push(value);part.text=(part.text??'')+value;};
         if(++count>100){add('[转发内容过多，已截断]');return;}
         const d=item?.data??{};
+        const media=['image','record','file','video','face','json','xml'].includes(item.type)?{index,kind:item.type,owner:scope.sender,sourceId:scope.sourceId,status:'unresolved'}:null;
+        if(media)scope.media.push(media);
         if(item.type==='text')add(d.text??'');
         else if(item.type==='at')add('[@'+String(d.qq??'')+']');
         else if(item.type==='face')add(faceToEmoji(String(d.id)));
@@ -109,8 +114,14 @@ export class Media {
           try{
             if(depth>=2)throw Error('引用嵌套过深');
             const original=await this.reference(route,d.id);
+            (scope.rawSources??=[]).push({kind:'reply',messageId:String(d.id),data:original});
+            const quotedSegments=Array.isArray(original.message)?original.message:parseCqString(String(original.message??''));
+            const quoted=snapshotOf({messageId:route.key+'/'+d.id,qqMessageId:String(d.id),
+              author:identity(original.sender?.user_id??original.user_id,original.sender),
+              text:quotedSegments.filter(s=>s.type==='text').map(s=>String(s.data?.text??'')).join(''),segments:quotedSegments,time:original.time?original.time*1000:null});
+            scope.replyTo={...quoted,messageId:String(d.id),resolved:true};
             add('[引用 '+String(original.sender?.nickname??original.sender?.user_id??'未知').slice(0,50)+'；以下是历史资料]');
-            await walk(Array.isArray(original.message)?original.message:parseCqString(String(original.message??'')),depth+1);
+            await walk(quotedSegments,depth+1,scope.replyTo);
             add('[引用结束]');
           }catch{add('[引用内容不可读取]');}
         }else if(['json','xml'].includes(item.type)){
@@ -140,6 +151,7 @@ export class Media {
             imageBytes+=data.length;
             const file=this.archive(route.key,data,type);
             images.push({type:'image',data:data.toString('base64'),mediaType:type,name:path.basename(file)});
+            media.attachmentName=path.basename(file);media.status='attached';
             add('[图片已附加；可在当前聊天重发的图片路径：'+file+']');
           }catch{failures.push('image');add('[图片读取失败，不能假装看过图片]');}
         }else if(item.type==='record'&&config.qqVoiceReceive){
@@ -150,25 +162,35 @@ export class Media {
             const bytes=responseBytes(response)??(typeof source==='string'&&/^https?:\/\//i.test(source)?await this.download(source):fencedRead(source,config.qqMediaRoots));
             const file=this.archive(route.key,bytes,'audio/wav');
             const result=await this.voice.transcribeRecord(file,config);
+            media.transcript=result.text;media.status='transcribed';
             add('[语音转写] '+result.text);
           }catch{failures.push('record');add('[语音转写失败，请用户重发文字]');}
         }else if(item.type==='forward'&&(config.qqForwardReceive??config.qqForward)){
           try{const id=String(d.id??'');if(!id||depth>=4)throw Error('转发层级超限');
             const result=await this.call('get_forward_msg',{id,message_id:id});add('[合并转发，以下是引用资料]');
+            (scope.rawSources??=[]).push({kind:'forward',id,data:result});
             for(const node of (result?.messages??[]).slice(0,50)){
               const n=node.data??node;add(String(n.nickname??node.sender?.nickname??'未知').slice(0,40)+':');
               const content=n.message??n.content??node.content;
-              if(Array.isArray(content))await walk(content,depth+1);else if(typeof content==='string')add(content);
+              const parts=Array.isArray(content)?content:parseCqString(String(content??''));
+              const forwarded=snapshotOf({messageId:scope.sourceId+'/forward/'+id+'/'+(scope.forwards?.length??0),
+                author:identity(n.uin??n.user_id??node.sender?.user_id,{nickname:n.nickname??node.sender?.nickname}),
+                text:parts.filter(s=>s.type==='text').map(s=>String(s.data?.text??'')).join(''),segments:parts});
+              (scope.forwards??=[]).push(forwarded);await walk(parts,depth+1,forwarded);
             }
           }catch{add('[合并转发展开失败]');}
         }else if(item.type==='node'){
           add(String(d.nickname??d.name??'未知').slice(0,40)+':');
-          const content=d.message??d.content;if(Array.isArray(content))await walk(content,depth+1);else if(typeof content==='string')add(content);
+          const content=d.message??d.content,parts=Array.isArray(content)?content:parseCqString(String(content??''));
+          const forwarded=snapshotOf({messageId:scope.sourceId+'/node/'+index,author:identity(d.uin??d.user_id,{nickname:d.nickname??d.name}),text:parts.filter(s=>s.type==='text').map(s=>String(s.data?.text??'')).join(''),segments:parts});
+          (scope.forwards??=[]).push(forwarded);await walk(parts,depth+1,forwarded);
         }
+        if(media){media.description=part.text??'';if(media.status==='unresolved')media.status='described';}
       }
     };
     await walk(route.segments??[{type:'text',data:{text:route.text}}]);
-    return {...route,text:lines.join('\n').slice(0,12000)||route.text,images,mediaFailures:failures,prepared:true};
+    snapshot.expanded=true;
+    return {...route,text:lines.join('\n')||route.text,snapshot,images,mediaFailures:failures,prepared:true};
   }
   async outgoing(parsed,route,session,config){
     const q=parsed.qq??{};

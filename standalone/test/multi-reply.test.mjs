@@ -11,7 +11,7 @@ import {decodeReply} from '../lib/memory.mjs';
 function fixture(t,{failureAt,stopAt}={}){
   const runtime=fs.mkdtempSync(path.join(os.tmpdir(),'qq-batch-'));
   t.after(()=>fs.rmSync(runtime,{recursive:true,force:true}));
-  const bridge=new Bridge(runtime,{wait:async()=>{}}),route={key:'100000001/private/100000002',id:'100000002',group:false,text:'记住我喜欢茶',messageId:'m1'};
+  const bridge=new Bridge(runtime,{wait:async()=>{}}),route={key:'100000001/private/100000002',id:'100000002',group:false,text:'记住我喜欢茶',messageId:'m1',author:{qq:'100000002',nickname:'甲',card:''}};
   bridge.config={...defaults,privatePreset:'test',qqVoiceSend:false,knowledgeEnabled:true};bridge.status.state='running';
   const session={id:'session',route,workspace:runtime,preset:'test',blocked:false};
   initializeLife(session);bridge.state.sessions[bridge.scope(route)]=session;
@@ -34,7 +34,7 @@ test('host-tool continuations retain every reply and process memory without send
     assert.equal(options.collectMessages,true);
     if(calls++===0)return [envelope('工具前的回答',{actions:[{tool:'qq_list_stickers',args:{}}]})];
     assert.match(prompt,/宿主工具结果/);
-    return [envelope('工具后的回答',{memory:[{action:'write',page:'user/tea.md',text:'# 茶\n喜欢茶',reason:'用户要求记住',evidence:['m1']}]}),envelope('最后回答')];
+    return [envelope('工具后的回答',{memory:[{action:'write',page:'user/100000002.md',text:'# 茶\n喜欢茶',reason:'用户要求记住',evidence:['m1'],subjects:[{qq:'100000002',basis:'self',evidence:['m1']}]}]}),envelope('最后回答')];
   };
   await bridge.handle(route,0);
   assert.deepEqual(sent.map(text),['工具前的回答','工具后的回答','最后回答']);

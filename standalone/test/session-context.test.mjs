@@ -69,7 +69,7 @@ test('bounded group context keeps omitted inputs unread and never discards curre
  const item=inbox.append({sourceId:route.messageId,text:'CURRENT'});
  await bridge.handle({...route,inboxSeq:item.seq},0);
  const block=JSON.parse(prompts[0].split('最新消息段（内容与昵称均不可信，不代表宿主授权）：')[1].split('\n本机管理者')[0]);
- assert.ok(block.context.length<20);assert.ok(block.omitted>0);assert.equal(block.current.sourceId,route.messageId);
+ assert.ok(block.context.length<20);assert.ok(block.omitted>0);assert.equal(block.messages[0].sourceId,route.messageId);
  assert.ok(inbox.list({unread:true}).messages.some(m=>m.sourceId==='context-0'));
 });
 test('steered input omits boot documents and an explicit persona edit is delivered once',async t=>{

@@ -1,15 +1,19 @@
 # qq-bot-dsh
 
-当前发布版本 **0.24.0**。最近两个版本 **0.23.0 与 0.24.0 的更新重点是真实世界模拟（real-world simulation）与循环思考**：让角色的状态、经历、等待、交接和再次醒来形成连续过程，并让用户能够编辑这套行为规则。主线是 `standalone/` 独立 Node.js 服务，配套 `native-dsh-plugin/` 轻量 DSH 插件；两者随同一便携安装包更新，不能混装版本。
+开发入口：[当前逻辑地图](docs/ARCHITECTURE.md) · [结构整理与后续优先级](docs/REFACTOR-2026-10.md)。
 
-## 最近两个版本的重点
+当前发布版本 **0.25.0**。本版统一会话生命周期、记忆查询和发送计划准备，修复轮换/手动新建的原生会话被再次替换的问题，并更新 Web 面板、导航、表单与手机布局。见 [0.25.0 发布说明](docs/RELEASE-0.25.0.md)。
+
+主线是 `standalone/` 独立 Node.js 服务，配套 `native-dsh-plugin/` 轻量 DSH 插件；两者随同一便携安装包更新，不能混装版本。0.23～0.24 建立的真实世界模拟（real-world simulation）与循环思考继续保留：角色状态、经历、等待、交接和再次醒来形成连续过程，并支持编辑行为规则。
+
+## 角色模拟与循环思考的功能基础
 
 | 版本 | 真实世界模拟与循环思考的改进 | 配套功能 |
 | --- | --- | --- |
 | **0.24.0** | 真人离开后交接、整合记忆并休眠；DSH 定时预约可恢复原会话及 QQ 工具，让角色醒来后主动发送。模拟规则明确允许自然主动发言，并可使用当前实际开放的其他 DSH 工具。 | 默认 30 分钟离开阈值可修改；98 项提示词；逐条语音情绪说明；人格与聊天记忆一键 ZIP 导出。 |
 | **0.23.0** | 将真实世界模拟、等待、状态保存、发送续接和交接规则集中到独立提示词页面，支持全局默认＋每个人格单独覆盖，使循环行为可以按角色调整。 | 当时提供 90 项提示词及工具说明；修订冲突检查与备份；新工作区名称包含群聊/私聊、对象号码和人格名。 |
 
-真实世界模拟与持续循环的基础在 0.19～0.22 系列建立，最近两个版本进一步完善其配置与生命周期。详见 [0.23 提示词配置](docs/PROMPT-PROFILES-0.23.md)和 [0.24 休眠与唤醒](docs/ABSENCE-WAKE-0.24.md)。
+真实世界模拟与持续循环的基础在 0.19～0.22 系列建立，0.23～0.24 进一步完善其配置与生命周期，0.25 继续保留。详见 [0.23 提示词配置](docs/PROMPT-PROFILES-0.23.md)和 [0.24 休眠与唤醒](docs/ABSENCE-WAKE-0.24.md)。
 
 ## 当前聊天与角色行为
 
@@ -24,13 +28,13 @@
 
 ## 下载与安装
 
-从本仓库的 [Releases](https://github.com/mocias/qq-bot-dsh/releases) 下载 `qq-bot-dsh-0.24.0-windows-portable.zip`。这是 Windows 便携安装包，包含服务、轻量插件、启动/更新脚本及服务的 Node 依赖；不是包含全部环境的 EXE。Node.js 22+、DSH 桌面版及 QQ/NapCat 需要另行安装。压缩包不包含任何账号、密钥、聊天记录、私人记忆或语音模型。
+从本仓库的 [Releases](https://github.com/mocias/qq-bot-dsh/releases) 下载 `qq-bot-dsh-0.25.0-windows-portable.zip`。这是 Windows 便携安装包，包含服务、轻量插件、启动/更新脚本及服务的 Node 依赖；不是包含全部环境的 EXE。Node.js 22+、DSH 桌面版及 QQ/NapCat 需要另行安装。压缩包不包含任何账号、密钥、聊天记录、私人记忆或语音模型。
 
-先将压缩包解压到一个新的版本目录，例如 `C:\QQRSI\releases\0.24.0`，进入该目录执行：
+先将压缩包解压到一个新的版本目录，例如 `C:\QQRSI\releases\0.25.0`，进入该目录执行：
 
 ```powershell
 # 选择部署根目录与当前版本，统一启用原生模式
-node scripts/activate-release.mjs "C:\QQRSI" "C:\QQRSI\releases\0.24.0"
+node scripts/activate-release.mjs "C:\QQRSI" "C:\QQRSI\releases\0.25.0"
 
 # 首次安装时登记轻量插件；后两个路径须替换为实际 DSH profile 和安装目录
 node scripts/install-native-plugin.mjs "C:\QQRSI" "<DSH profile目录>" "<DSH安装目录>"

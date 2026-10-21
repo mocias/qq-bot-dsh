@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { MemoryStore, decodeReply } from './memory.mjs';
+import { decodeReply } from './memory.mjs';
 import {ATTRIBUTION_RULES} from './message-snapshot.mjs';
-import {readMemory,searchMemory,queryMemory} from './memory-access.mjs';
-import {diagnoseMemory,maintainMemory,MAINTENANCE_GUIDE} from './memory-maintenance.mjs';
+import {runMemoryQuery} from './memory-tools.mjs';
+import {diagnoseMemory,MAINTENANCE_GUIDE} from './memory-maintenance.mjs';
 import {selectedTools} from '../../native-dsh-plugin/lib/schema.mjs';
 
 export function initializeLife(session, now=Date.now()) {
@@ -73,12 +73,7 @@ export async function maintain({session,config,store,dsh,persist,now,isCurrent,s
     const executeRead=(name,args)=>{
       if(signal.aborted||life.version!==version||!isCurrent())throw Error('整理回合已失效');
       if(!args||typeof args!=='object'||Array.isArray(args)||++toolCount>queryLimit)throw Error('整理查询参数无效或次数超限');
-      if(name==='qq_memory_diagnose')return diagnoseMemory(store,args);
-      if(name==='qq_memory_read')return readMemory(store,args,{trackAccess:false});
-      if(name==='qq_memory_search')return searchMemory(store,args,{trackAccess:false});
-      if(name==='qq_memory_query')return queryMemory(store,args);
-      if(name==='qq_memory_maintain')return maintainMemory(store,args,{previewOnly:true});
-      throw Error('后台只开放记忆诊断、查询与维护预览');
+      return runMemoryQuery(store,name,args,{background:true});
     };
     const nativeTools=config.dshNativeTools?{allowed,execute:async(name,args)=>{
       if(!allowed.includes(name)||signal.aborted||life.version!==version||!isCurrent())throw Error('整理回合已失效');

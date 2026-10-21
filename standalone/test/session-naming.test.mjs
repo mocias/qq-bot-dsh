@@ -86,3 +86,59 @@ test('group rotation requires a durable receipt, and an arriving group message k
   noteArrival(old,bridge.now());release('abandoned-candidate');await task;
   assert.equal(bridge.state.sessions[scope].id,old.id);
 });
+
+for(const replacement of ['manual','rotation'])test(`native ${replacement} session survives startup and the next message without another replacement`,async t=>{
+  const {bridge,runtime,titles}=setup(t);
+  bridge.config=validate({dshNativeTools:true},bridge.config);
+  bridge.dsh.prompt=async()=>'';
+  const input=route(groupKey),scope=bridge.scope(input);
+  await bridge.handle(input,1);
+  const previous=bridge.state.sessions[scope];
+  if(replacement==='manual')await bridge.newConversation(groupKey);
+  else{
+    bridge.memory(groupKey).commit([],{id:'native-proof',evidenceIds:[],digest:true});
+    await bridge.rotate(scope,previous,'native-proof',previous.life.version,1,new AbortController().signal);
+  }
+  const current=bridge.state.sessions[scope];
+  assert.notEqual(current.id,previous.id);
+  // Exercise persisted metadata too: startup and ordinary messages must agree.
+  const restored=new Bridge(runtime,{media:{outgoing:async()=>null}});
+  restored.config=bridge.config;restored.status.state='running';restored.generation=1;restored.dsh=bridge.dsh;
+  assert.equal((await restored.ensureStartupSession(input)).id,current.id);
+  await restored.handle({...input,messageId:groupKey+'/2'},1);
+  assert.equal(restored.state.sessions[scope].id,current.id);
+  assert.equal(restored.state.sessions[scope].transport,'native-v1');
+  assert.equal(titles.length,2);
+  assert.equal(restored.state.retired.length,1);
+});
+
+test('failed replacement creation leaves the current session and retirement history intact',async t=>{
+  const {bridge}=setup(t),input=route(groupKey),scope=bridge.scope(input);
+  await bridge.handle(input,1);
+  const current=bridge.state.sessions[scope];current.blocked=true;
+  bridge.dsh.createSession=async()=>{throw Error('create unavailable');};
+  await assert.rejects(bridge.handle({...input,messageId:'retry'},1),/create unavailable/);
+  assert.equal(bridge.state.sessions[scope],current);
+  assert.equal(bridge.state.retired.length,0);
+});
+
+test('stopping during session creation prevents permission setup and model submission',async t=>{
+  const {bridge}=setup(t),input=route(privateKey);
+  bridge.config=validate({permissionPreset:'read-only'},bridge.config);
+  let release;bridge.dsh.createSession=()=>new Promise(resolve=>release=resolve);
+  bridge.dsh.applyPermission=async()=>assert.fail('stopped session cannot change permissions');
+  bridge.dsh.prompt=async()=>assert.fail('stopped session cannot submit input');
+  const task=bridge.handle(input,1);
+  bridge.status.state='stopped';release('cancelled-candidate');
+  await assert.rejects(task,/已停止/);
+  assert.equal(Object.keys(bridge.state.sessions).length,0);
+});
+
+test('session provisioning follows restored bridge state after a rollback',async t=>{
+  const {bridge}=setup(t),input=route(privateKey);
+  const abandoned=bridge.state;
+  bridge.state=structuredClone(bridge.state);
+  await bridge.ensureStartupSession(input);
+  assert.equal(Object.keys(bridge.state.sessions).length,1);
+  assert.equal(Object.keys(abandoned.sessions).length,0);
+});

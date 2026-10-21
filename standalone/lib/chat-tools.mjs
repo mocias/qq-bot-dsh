@@ -5,9 +5,10 @@ import {groupWorkspacePath} from '../../dsh-group-social/lib/security.mjs';
 import {validateSearchQuery,sanitizeSearchResult} from '../../dsh-group-social/lib/search.mjs';
 import {publicDownload,fencedRead} from './media.mjs';
 import {sniffImageMediaType} from '../../dsh-group-social/lib/images.mjs';
-import {readMemory,searchMemory,queryMemory} from './memory-access.mjs';
+import {readMemory} from './memory-access.mjs';
+import {isMemoryQuery,runMemoryQuery} from './memory-tools.mjs';
 import {readPersona,updatePersona} from './persona.mjs';
-import {diagnoseMemory,maintainMemory,MAINTENANCE_GUIDE} from './memory-maintenance.mjs';
+import {MAINTENANCE_GUIDE} from './memory-maintenance.mjs';
 const decode=s=>s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,'$1').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/<[^>]+>/g,'');
 export async function publicSearch(query){
   const text=(await publicDownload('https://www.bing.com/search?format=rss&q='+encodeURIComponent(validateSearchQuery(query)),{maxBytes:512000})).toString('utf8');
@@ -38,9 +39,9 @@ export class ChatTools {
       }
       return updatePersona(this.store,args,{config:this.config,inputs,id:'legacy-persona-'+randomUUID()});
     }
-    if(['qq_memory_read','qq_memory_search','qq_memory_query','qq_memory_diagnose','qq_memory_maintain'].includes(tool)){
+    if(isMemoryQuery(tool)){
       if(!this.config.memoryEnabled||this.route.trigger)throw Error('当前回合未开放记忆读取');
-      return ({qq_memory_read:readMemory,qq_memory_search:searchMemory,qq_memory_query:queryMemory,qq_memory_diagnose:diagnoseMemory,qq_memory_maintain:maintainMemory})[tool](this.store,args);
+      return runMemoryQuery(this.store,tool,args);
     }
     if(tool.startsWith('qq_group_')&&!this.config.groupToolsEnabled)throw Error('群聊专用工具未启用');
     if(!tool.startsWith('qq_group_')&&!this.config.knowledgeEnabled)throw Error('知识库未启用');

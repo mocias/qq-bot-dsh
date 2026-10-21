@@ -197,6 +197,8 @@ function paintVoiceStatus({config,voice}){
   const selected=voiceProfileData.profiles.find(p=>p.id===$('voice-profile').value&&!p.deletedAt);
   if(selected){config={...config,...selected.settings};voice={...selected.status,busy:voice.busy};}
   const mimo=config.voiceProvider==='mimo';
+  $('tts-label').closest('article').dataset.state=voice.ttsReady?(mimo?'configured':'ready'):'missing';
+  $('model-label').closest('article').dataset.state=voice.asrReady?(mimo?'configured':'ready'):'missing';
   $('tts-label').textContent=mimo?(config.mimoTtsMode==='clone'?'MiMo 音色克隆':config.mimoTtsMode==='design'?'MiMo 音色设计':'MiMo 预置音色'):'Windows 中文语音';
   $('tts-status').textContent=voice.ttsReady?(mimo?'已配置 · 请生成语音验证':'组件已就绪'):(mimo?'密钥、音色描述或参考录音未就绪':'组件未找到');
   $('asr-status').textContent=voice.asrReady?(mimo?'已配置 · 请识别音频验证':'本地模型已就绪'):(mimo?'密钥未配置':'模型或环境未找到');
@@ -251,11 +253,11 @@ let generatedUrl='',initialized=false;
 function notice(text,error=false){$('notice').textContent=text;$('notice').classList.toggle('error',error);}
 async function request(url,body){const response=await fetch(url,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-QQ-RSI':'panel'},body:JSON.stringify(body)});const result=await response.json();if(!response.ok)throw Error(result.error||'请求失败');return result;}
 function fill(config,selected=fields){for(const field of selected){if(field.endsWith('Token')){$(field).value='';continue;}if(switches.includes(field)){$(field).checked=config[field];continue;}$(field).value=Array.isArray(config[field])?config[field].join('\n'):config[field];}$('dsh-key-state').textContent=config.dshTokenConfigured?'已保存':'未配置';$('qq-key-state').textContent=config.qqTokenConfigured?'已保存':'未配置';}
-async function refresh(){const status=await request('/api/status');if(!initialized){fill(status.config);await fillVoice(status.config);initialized=true;}$('service-status').textContent='● 独立服务已运行';paintVoiceStatus(status);$('bridge-status').textContent=status.bridge.state==='running'?'QQ '+(status.bridge.account||'')+' 已连接':status.bridge.state==='connecting'?'正在连接 QQ':'QQ 连接已停止';$('bridge-detail').textContent=status.bridge.lastError||`待处理消息：${status.bridge.active} · 启动后接收名单内已启用的消息`;$('start').disabled=status.bridge.state!=='stopped';$('stop').disabled=status.bridge.state==='stopped';paintChannels(status.bridge);paintLife(status);return status;}
+async function refresh(){const status=await request('/api/status');if(!initialized){fill(status.config);await fillVoice(status.config);initialized=true;}$('service-status').textContent='独立服务已运行';$('sidebar-bridge-state').textContent=status.bridge.state==='running'?'QQ 接收运行中':status.bridge.state==='connecting'?'QQ 正在连接':'QQ 接收已停止';$('sidebar-bridge-state').parentElement.dataset.state=status.bridge.state;paintVoiceStatus(status);$('bridge-status').textContent=status.bridge.state==='running'?'QQ '+(status.bridge.account||'')+' 已连接':status.bridge.state==='connecting'?'正在连接 QQ':'QQ 连接已停止';$('bridge-detail').textContent=status.bridge.lastError||`待处理消息：${status.bridge.active} · 启动后接收名单内已启用的消息`;$('start').disabled=status.bridge.state!=='stopped';$('stop').disabled=status.bridge.state==='stopped';paintChannels(status.bridge);paintLife(status);return status;}
 async function action(button,work){button.disabled=true;notice('正在处理，请稍候…');try{await work();if($('notice').textContent==='正在处理，请稍候…')notice('操作已完成。');}catch(error){notice(error.message,true);}finally{button.disabled=false;if(button.id==='persona-apply'&&managementData)paintPersonaCards(managementData);if(button.id.startsWith('voice-profile-'))updateProfileButtons();if(button.id==='reference-delete')button.disabled=!$('mimoReferenceId').value;if(button.id==='reference-restore')button.disabled=$('reference-deleted').options.length<=1;await refresh().catch(()=>{});}}
 const promptEditor=mountPromptEditor({request,notice});
 const pages={
-  voice:['语音与通话','选择语音服务、配置音色并试听；实时通话后续接入。'],
+  voice:['语音与通话','选择语音服务、配置音色，让每个人格拥有自己的声音。'],
   connections:['连接与配置','管理 DSH、QQ 消息入口与桌面 QQ 连接。'],
   prompts:['提示词配置','查看和修改共用规则，为每个人格设置独立覆盖。'],
   chat:['会话与聊天','管理会话轮换、多媒体消息、主动搭话与群聊能力。'],
@@ -269,6 +271,8 @@ for(const tab of document.querySelectorAll('[data-tab]'))tab.addEventListener('c
   for(const page of Object.keys(pages))$(page+'-tab').hidden=page!==name;
   document.querySelectorAll('[data-tab]').forEach(x=>{x.classList.toggle('active',x===tab);x.setAttribute('aria-current',x===tab?'page':'false');});
   [$('page-title').textContent,$('page-subtitle').textContent]=pages[name];notice('');
+  $('page-context').textContent=pages[name][0];
+  window.scrollTo({top:0});
   if(name==='chat'&&!policyData)loadPolicy($('policy-scope').value).catch(e=>notice(e.message,true));
   if(name==='prompts')promptEditor.load().catch(e=>notice(e.message,true));
   if(name==='manage')loadManagedKeys().catch(e=>notice(e.message,true));

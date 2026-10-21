@@ -1,1 +1,10 @@
-:root{font-family:"Segoe UI","Microsoft YaHei",sans-serif;color:#22302f;background:#f5f6f3}body{margin:0;padding:48px 20px}main{max-width:620px;margin:6vh auto;background:white;border:1px solid #dce5dc;border-radius:18px;padding:36px}span{color:#48755b;font-size:13px}h1{font-size:28px;margin:20px 0}p,li{font-size:15px;line-height:1.9}li{margin:12px 0}strong{color:#244e40}.hint{font-size:13px;color:#6c7a71}
+:root{color-scheme:light;font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;color:#23343e;background:#f5f7f9;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}body{margin:0;padding:48px 20px;min-height:100vh;display:grid;place-items:center}
+main{width:100%;max-width:570px;background:#fff;border:1px solid #e5eaee;border-radius:18px;padding:38px 42px;box-shadow:0 12px 50px #23343e06}
+.welcome-brand{display:flex;align-items:center;gap:12px;font-size:20px;font-weight:750;letter-spacing:-.5px}.welcome-logo{display:grid;place-items:center;background:#147b66;color:white;width:42px;height:44px;border-radius:12px;font-size:26px;font-weight:700}
+.welcome-brand small{display:block;font-size:10px;letter-spacing:1.4px;font-weight:400;color:#8c9aa3;margin-top:4px}.welcome-divider{height:1px;background:#edf1f4;margin:28px 0}
+.welcome-kicker{color:#36816b;font-size:11px;font-weight:600}h1{font-size:27px;letter-spacing:-.6px;margin:13px 0 16px;font-weight:700}
+p,li{font-size:13px;line-height:1.9;color:#748590}p{margin:12px 0}ol{list-style:none;counter-reset:steps;padding:5px 0 5px;margin:20px 0}li{counter-increment:steps;position:relative;padding:11px 0 11px 43px}
+li::before{content:"0" counter(steps);position:absolute;left:0;top:10px;width:29px;height:30px;display:grid;place-items:center;background:#eaf5ef;color:#37836b;border-radius:8px;font-size:10px;font-weight:700}
+strong{color:#276c58;font-weight:600}.hint{font-size:11px;color:#9aa6ae;line-height:1.9}.hint:last-child{padding-top:16px;border-top:1px solid #edf1f4;margin-top:20px}
+@media(max-width:540px){body{padding:20px 16px}main{padding:28px 24px;border-radius:14px}h1{font-size:24px}}

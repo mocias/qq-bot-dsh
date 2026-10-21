@@ -2,11 +2,10 @@ import {promptText} from '../../native-dsh-plugin/lib/prompt-text.mjs';
 import {selectedTools} from '../../native-dsh-plugin/lib/schema.mjs';
 import {isSilentReply} from './reply-control.mjs';
 import {messageSnapshot,evidenceMessages} from './message-snapshot.mjs';
-import {readMemory,searchMemory,queryMemory} from './memory-access.mjs';
+import {isMemoryQuery,runMemoryQuery} from './memory-tools.mjs';
 import {memoryRuntimeContext} from './memory-context.mjs';
 import {historyStatus} from './memory-history.mjs';
 import {readPersona,updatePersona} from './persona.mjs';
-import {diagnoseMemory,maintainMemory} from './memory-maintenance.mjs';
 import {worldSimulationPrompt} from './world-simulation.mjs';
 import {ChatHandoff} from './handoff.mjs';
 import {RoleState,currentRoleState} from './role-state.mjs';
@@ -79,21 +78,13 @@ export function nativeTurn({config,route,session,store,tools,messaging,job,isCur
       if(Object.keys(args).length)throw Error('不回复工具不接受参数');
       if(!job.continuous&&(messaging.outputs.length||tools.replyImages.length))throw Error('本轮已有发送计划，不能同时选择不回复');
       job.noReply=true;result={silent:true,sent:false};
-    }else if(name==='qq_memory_read'){
-      result=readMemory(store,args);
+    }else if(isMemoryQuery(name)){
+      result=runMemoryQuery(store,name,args,{id:'native-maintain-'+session.id+'-'+route.messageId+'-'+callId});
     }else if(name==='qq_persona_read'){
       if(Object.keys(args).length)throw Error('人设读取不接受参数');
       result=readPersona(store,config,job.inputs);
     }else if(name==='qq_persona_update'){
       result=updatePersona(store,args,{config,inputs:job.inputs,id:'native-persona-'+session.id+'-'+route.messageId+'-'+callId});
-    }else if(name==='qq_memory_search'){
-      result=searchMemory(store,args);
-    }else if(name==='qq_memory_query'){
-      result=queryMemory(store,args);
-    }else if(name==='qq_memory_diagnose'){
-      result=diagnoseMemory(store,args);
-    }else if(name==='qq_memory_maintain'){
-      result=maintainMemory(store,args,{id:'native-maintain-'+session.id+'-'+route.messageId+'-'+callId});
     }else if(name==='qq_memory_update'){
       if(Object.keys(args).some(k=>k!=='updates'))throw Error('记忆工具参数无效');
       store.commit(args.updates,{id:'native-'+session.id+'-'+route.messageId+'-'+callId,evidenceIds:evidence,evidenceMessages:evidenceMessages(job.inputs),summary:'原生工具保存本聊天稳定事实'});

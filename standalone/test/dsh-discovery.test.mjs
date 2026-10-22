@@ -7,7 +7,7 @@ import http from 'node:http';
 import {once} from 'node:events';
 import {randomBytes} from 'node:crypto';
 import YAML from 'js-yaml';
-import {discoverDshUrl,probeDshUrl} from '../lib/dsh-discovery.mjs';
+import {discoverDshUrl,probeDshUrl,persistDiscoveredDshUrl} from '../lib/dsh-discovery.mjs';
 import {DshClient} from '../lib/dsh.mjs';
 
 function dshHome(t){
@@ -61,4 +61,20 @@ test('a client recovers from a stale port once and persists the discovered addre
   await assert.rejects(client.rpc('agentPresets/list'),/DSH 请求失败或超时/);
   client.close();
   assert.deepEqual(persisted,[]);
+});
+
+test('a discovered address is persisted even though the client already mutated the shared config',t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'dsh-persist-'));
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const file=path.join(dir,'config.private.json');
+  const config={dshUrl:'http://127.0.0.1:1',botQQ:'100000001'};
+  // recoverUrl() mutates the very object the service holds before it notifies.
+  config.dshUrl='http://127.0.0.1:57469';
+  const logged=[];
+  const next=persistDiscoveredDshUrl(config.dshUrl,{config,configFile:file,bridge:{config:null},
+    systemLog:{record:(event)=>logged.push(event)},writeJson:(target,value)=>fs.writeFileSync(target,JSON.stringify(value))});
+  assert.equal(JSON.parse(fs.readFileSync(file,'utf8')).dshUrl,'http://127.0.0.1:57469');
+  assert.equal(next.dshUrl,'http://127.0.0.1:57469');
+  assert.equal(next.botQQ,'100000001');
+  assert.deepEqual(logged,['dsh.url.persisted']);
 });

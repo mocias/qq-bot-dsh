@@ -7,7 +7,7 @@ import { defaults, readJson, writeJson, validate, publicConfig } from './lib/con
 import { VoiceService } from './lib/voice-service.mjs';
 import { Bridge } from './lib/bridge.mjs';
 import { DshClient,onDiscoveredDshUrl } from './lib/dsh.mjs';
-import { discoverDshUrl } from './lib/dsh-discovery.mjs';
+import { discoverDshUrl,persistDiscoveredDshUrl } from './lib/dsh-discovery.mjs';
 import { importedStores } from './lib/import-memory.mjs';
 import { probeQQ } from './lib/onebot.mjs';
 import { MemoryStore } from './lib/memory.mjs';
@@ -41,13 +41,8 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
   recoverMemoryReset(runtime);
   const systemLog=new SystemLog(runtime);
   // A discovered DSH port is persisted so the panel and later turns reuse it.
-  onDiscoveredDshUrl(url=>{
-    if(!url||config.dshUrl===url)return;
-    config={...config,dshUrl:url};
-    writeJson(configFile,config);
-    if(bridge.config)bridge.config=config;
-    systemLog.record('dsh.url.persisted',{component:'dsh',url});
-  });
+  // The client already mutated the shared config object, so this must always write.
+  onDiscoveredDshUrl(url=>{config=persistDiscoveredDshUrl(url,{config,configFile,bridge,systemLog,writeJson});});
   const voice=injectedVoice || new VoiceService(root,runtime), bridge=injectedBridge || new Bridge(runtime,{voice});
   bridge.systemLog=systemLog;
   const desktop=new DesktopQQ(runtime),management=new Management(runtime);

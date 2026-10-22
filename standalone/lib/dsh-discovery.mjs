@@ -85,3 +85,16 @@ export async function discoverDshUrl({current='',timeoutMs=1200,concurrency=8,po
   }
   return null;
 }
+
+/**
+ * Persist a discovered URL. The client mutates the shared config object before
+ * notifying, so this must write unconditionally instead of comparing values.
+ */
+export function persistDiscoveredDshUrl(url,{config,configFile,bridge,systemLog,writeJson}){
+  if(!url)return config;
+  const next={...config,dshUrl:url};
+  writeJson(configFile,next);
+  if(bridge?.config)bridge.config=next;
+  systemLog?.record('dsh.url.persisted',{component:'dsh',url});
+  return next;
+}

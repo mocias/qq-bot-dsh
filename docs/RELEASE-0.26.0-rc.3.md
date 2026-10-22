@@ -31,5 +31,5 @@
 - 激活前备份 `private-backups/2026-10-22-pre-rc3`（4,726 个文件、60.7 MB，含配置、记忆、知识库、收件箱、聊天上下文与提示词备份）。
 - 激活后逐项校验 4,726 个受保护文件：仅 `launch.private.json` 因新进程写入而改变，其余逐字节一致，无缺失。
 - 服务在 `127.0.0.1:3199` 运行，`bridge.state=stopped`、活动回合 0，QQ 接收保持停止；模型配置接口可读（revision 0，沿用 DSH 默认）。
-- 部署时 DSH 桌面版未运行：原生插件登记已写入（`link:` 依赖、bundle 已启用、bootstrapHash 未变），但 `scheduledWakeRouter` 与版本探针需在 DSH 启动后另测，不能据此宣称插件已在线。
+- 部署时 DSH 桌面版未运行；DSH 启动后补测原生插件：`state=ready`、`installed/enabled=true`、插件版本与构建均与服务一致、`active=0`、`scheduledWakeRouter=true`、`workspaceDeletionPolicy=fresh-session`。补测时面板保存的 DSH 地址与 DSH 实际监听端口不一致（DSH 每次启动端口可变），探针改用实际端口；启用接收前须在“连接与配置”同步该地址。
 - 本次部署未启用接收、未登录 QQ、未发送消息。

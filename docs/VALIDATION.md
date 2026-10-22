@@ -482,5 +482,12 @@
 - 统一激活 `releases/0.26.0-rc.3-model-persona`：发布清单 114 项哈希逐项校验通过，服务与插件版本一致；发布指针、`launch.private.json`、`release.json` 的版本与 buildId 三处一致（`ce684059ef74`）。
 - 激活后复核 4,726 个受保护文件：仅 `launch.private.json` 因新进程写入改变，无缺失、无其他字节变化。
 - 服务在 `127.0.0.1:3199` 运行，`bridge.state=stopped`、`active=0`，QQ 接收保持停止；`/api/model-profiles` 可读，revision 0，沿用 DSH 默认模型。
-- 原生插件：profile 依赖为指向部署根下 `native-dsh-loader` 的 `link:` 形式，bundle 已启用，`bootstrapHash` 未变（稳定 loader 从发布指针解析插件）。部署时 DSH 桌面版未运行，`qqRsiNative/probe` 的 `scheduledWakeRouter` 实时结果未取得，须在 DSH 启动后补测；不以登记文件代替在线探针。
+- 原生插件：profile 依赖为指向部署根下 `native-dsh-loader` 的 `link:` 形式，bundle 已启用，`bootstrapHash` 未变（稳定 loader 从发布指针解析插件）。部署时 DSH 桌面版未运行，当时未取得在线探针；DSH 启动后已补测，结果见下一节。
 - 部署过程未启用接收、未登录 QQ、未发送消息、未调用真实模型。
+
+## 2026-10-22 · rc.3 原生插件在线探针补测
+
+- DSH 启动后调用 `pluginManager/listBundles` 与 `qqRsiNative/probe`：`state=ready`、`installed=true`、`enabled=true`、`compatible=true`、`pluginVersion=0.26.0-rc.3`、`active=0`；探针返回 `version=0.26.0-rc.3`、`protocol=1`、`buildId` 与服务一致、`scheduledWakeRouter=true`、`workspaceRepair=true`、`workspaceDeletionPolicy=fresh-session`。
+- 结论：原生插件确实已随 DSH 加载并启用，定时唤醒路由生效，版本与构建和服务一致。此前的“待补测”已关闭。
+- 补测时发现面板保存的 DSH 地址（旧端口）与 DSH 本次实际监听端口不一致，直接探测报“DSH 请求失败或超时”，改用实际端口后成功。DSH 每次启动端口可变，**启用 QQ 接收前必须在“连接与配置”同步当前 DSH 地址**，否则服务无法提交模型。
+- 本次补测只读取插件状态与探针，未提交模型请求、未启用接收、未发送消息。

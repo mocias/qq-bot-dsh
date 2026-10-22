@@ -36,7 +36,7 @@
 
 ## 下载与安装
 
-本地预览包名为 `qq-bot-dsh-0.26.0-rc.3-windows-portable.zip`，解压后运行根目录 `open-panel.cmd`，按 `LOCAL-PREVIEW.md` 操作。本版未上传 [GitHub Releases](https://github.com/mocias/qq-bot-dsh/releases)。以下正式部署命令仅供后续手动安装/切换时使用，打包不会自动执行。这是 Windows 便携安装包，包含服务、轻量插件、启动/更新脚本及服务的 Node 依赖；不是包含全部环境的 EXE。Node.js 22+ 与 DSH 桌面版需要另行安装。QQ/NapCat 二进制不随发行包提供；Shell 接入可在面板点击准备后从固定官方来源下载并校验包含 Node、QQ native runtime 的 NapCat 包，使用外部接入则需配置已有的 OneBot 服务。压缩包不包含任何账号、密钥、聊天记录、私人记忆或语音模型。
+本地预览包名为 `qq-bot-dsh-0.26.0-rc.3-windows-portable.zip`，解压后运行根目录 `open-panel.cmd`，按 `LOCAL-PREVIEW.md` 操作。本版已发布 [GitHub Releases v0.26.0-rc.3](https://github.com/mocias/qq-bot-dsh/releases/tag/v0.26.0-rc.3)，提供源码包、Windows 便携包与 `SHA256SUMS.txt`，下载后先核对摘要。以下正式部署命令仅供后续手动安装/切换时使用，打包不会自动执行。这是 Windows 便携安装包，包含服务、轻量插件、启动/更新脚本及服务的 Node 依赖；不是包含全部环境的 EXE。Node.js 22+ 与 DSH 桌面版需要另行安装。QQ/NapCat 二进制不随发行包提供；Shell 接入可在面板点击准备后从固定官方来源下载并校验包含 Node、QQ native runtime 的 NapCat 包，使用外部接入则需配置已有的 OneBot 服务。压缩包不包含任何账号、密钥、聊天记录、私人记忆或语音模型。
 
 先将压缩包解压到一个新的版本目录，例如 `C:\QQRSI\releases\0.26.0-rc.3`，进入该目录执行：
 

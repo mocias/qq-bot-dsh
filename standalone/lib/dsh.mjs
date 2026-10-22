@@ -63,7 +63,7 @@ export class DshClient {
     this.systemLog?.record('rpc.'+operation+'.started',{component:'dsh'});
     try {
     await this.authenticate();
-    const args = ['agentPresets/list','permissionPresets/catalog','pluginManager/listBundles'].includes(method) ? {} : ['commands/execute','pluginManager/setBundleEnabled'].includes(method)?request:{ [method === 'session/list' ? '_request' : 'request']: request };
+    const args = ['agentPresets/list','permissionPresets/catalog','pluginManager/listBundles','session/modelCatalog'].includes(method) ? {} : ['commands/execute','pluginManager/setBundleEnabled'].includes(method)?request:{ [method === 'session/list' ? '_request' : 'request']: request };
     let response;
     const send=()=>fetch(new URL('/api/'+method, this.config.dshUrl), { method: 'POST', redirect: 'error',
       headers: { 'Content-Type': 'application/json', Cookie: this.cookie },

@@ -16,7 +16,7 @@ export const defaults = {
   voice: 'Microsoft Huihui Desktop', model: 'small',
   voiceProvider: 'local', mimoApiKey: '', mimoTtsMode: 'preset', mimoVoice: 'mimo_default',
   mimoReferenceId: '', mimoStyle: '', mimoDesign: '', mimoAsrLanguage: 'auto',
-  memoryEnabled: true, memoryIdleSeconds: 1800, userAwaySeconds:1800,
+  memoryEnabled: true, memoryIdleSeconds: 1800, userAwaySeconds:600,
   memoryConversationIdleEnabled:true,memoryMinTurns:3,memoryStaleEnabled:true,memoryStaleSeconds:7200,memoryStaleCooldownSeconds:10800,memoryStaleMaxPerSession:2, rotateAfterCompactions: 15,
   personaPolicy:'participants',
   memoryAutoInject:true,memoryRegisterSkill:true,memoryActiveOnly:false,memoryBootMaxChars:6000,memoryPageMaxChars:10000,proactiveMaxPerSession:0,

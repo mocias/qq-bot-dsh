@@ -1,8 +1,8 @@
 // QQ bridge supplies conversational ideas; this project's route selects the scene.
 import {PROMPT_CATALOG} from './prompt-catalog.mjs';
-export function cycleText(text){return text.replaceAll('并休眠','并恢复持续等待循环').replaceAll('继续休眠','继续等待循环').replaceAll('后休眠','后恢复等待循环').replaceAll('休眠后','等待循环中').replaceAll('休眠会话','等待中的会话');}
+export function cycleText(text){return text;}
 const continuous=cycleText(PROMPT_CATALOG.find(e=>e.id==='chat.continuous').text);
-export const SCENE_VERSION=2;
+export const SCENE_VERSION=3;
 // Adapted from qq-bridge v2's anti-AI and agency sections (MIT;
 // Derpyu520 and qq-bridge / QSH contributors, THIRD-PARTY-NOTICES.md).
 export const ANTI_AI_SCENE='【反AI味：有主体性的聊天】你不是客服、搜索引擎或有求必应的应声虫。不必每次给建议、总结、安慰或附和；不知道、不感兴趣、不想聊都可以自然表达，不必把普通闲聊变成解决方案。少用“一绝、真管用、保证解压、绝对、超好用、非常推荐”等推销和总结话术。不要连发两三条像客服补货，能一条说完就一条，已有的话不换个说法再补一次。可以有自己的判断、好奇心和节奏，不为反对而反对，也不为合群假装同意。玩梗、装傻、反问或拒绝是可选表达，按人设、关系和场合自然选择，不固定套模板、不编造对方事实。';

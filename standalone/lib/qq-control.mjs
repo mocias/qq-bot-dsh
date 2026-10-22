@@ -69,13 +69,16 @@ export class QQControl{
     catch{result.interfaceOnline=false;}
     return result;
   }
-  async qrcode(config){
+  async qrcode(config,{watch=false}={}){
     if(!/^\d{5,20}$/.test(config.botQQ))throw Error('请先保存机器人 QQ 账号，再显示登录二维码');
     const call=await this.admin(config),state=await call('/QQLogin/CheckLoginStatus');
-    if(state?.isLogin||state?.qrLoginAccepted)throw Error('QQ 已登录或正在完成登录，请刷新状态；不会替换现有登录');
+    if(state?.isLogin||state?.qrLoginAccepted){
+      if(watch)return {state:state.isLogin?'logged-in':'confirming',message:state.isLogin?'QQ 已登录，正在核对账号。':'扫码已接受，等待 QQ 完成登录…'};
+      throw Error('QQ 已登录或正在完成登录，请刷新状态；不会替换现有登录');
+    }
     const data=await call('/QQLogin/GetQQLoginQrcode');
     if(typeof data?.qrcode!=='string'||!data.qrcode||data.qrcode.length>4096)throw Error('登录二维码尚未生成，请稍后重试');
-    return {image:await this.qr(data.qrcode,{width:256,margin:2}),message:'请用面板指定账号扫码；扫码不改变面板账号，也不会自动启动回复。'};
+    return {state:'waiting',image:await this.qr(data.qrcode,{width:256,margin:2}),message:'二维码状态每 3 秒自动更新。请用面板指定账号扫码；不会自动启动回复。'};
   }
   async contacts(config,kind){
     if(!['private','group'].includes(kind))throw Error('请选择好友或群');

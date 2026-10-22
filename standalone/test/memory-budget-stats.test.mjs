@@ -1,0 +1,21 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {memoryBudgetStats} from '../lib/memory-budget-stats.mjs';
+import {personaIdentity,PersonaCards} from '../lib/persona-cards.mjs';
+const key='100000001/private/100000002';
+test('actual budgets count native boot and active pages read-only, respecting shared persona',t=>{
+ const runtime=fs.mkdtempSync(path.join(os.tmpdir(),'qq-budget-stats-'));t.after(()=>fs.rmSync(runtime,{recursive:true,force:true}));
+ const empty=memoryBudgetStats(runtime,key);assert.equal(empty.exists,false);assert.deepEqual(fs.readdirSync(runtime),[]);
+ const root=path.join(runtime,'memories',personaIdentity(runtime,key).memoryScope);fs.mkdirSync(path.join(root,'concepts'),{recursive:true});
+ fs.writeFileSync(path.join(root,'SOUL.md'),'人设😀');fs.writeFileSync(path.join(root,'MEMORY.md'),'x'.repeat(1200));fs.writeFileSync(path.join(root,'index.md'),'索引');fs.writeFileSync(path.join(root,'concepts','a.md'),'a'.repeat(4000));
+ const archive='---\nqq_memory_state: archived\n---\n旧资料';fs.writeFileSync(path.join(root,'concepts','old.md'),archive);
+ const before=fs.readFileSync(path.join(root,'concepts','a.md'),'utf8');const stat=memoryBudgetStats(runtime,key);
+ assert.equal(stat.boot.chars,1202);assert.equal(stat.boot.personaOutsideBudget,4);assert.equal(stat.pages.chars,4000);assert.equal(stat.pages.candidateChars,3000);assert.equal(stat.pages.excluded,1);
+ assert.equal(fs.readFileSync(path.join(root,'concepts','a.md'),'utf8'),before);
+ assert.equal(memoryBudgetStats(runtime,key,undefined,{native:false}).boot.chars,1206);
+ const cards=new PersonaCards(runtime),other='100000001/group/100000003',ref=cards.reuse({key:other,sourceKey:key,sourcePersonaId:'default',revision:0});
+ assert.deepEqual(memoryBudgetStats(runtime,other,ref.id).pages,stat.pages);
+});

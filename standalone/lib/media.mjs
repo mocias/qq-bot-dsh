@@ -136,6 +136,7 @@ export class Media {
             const source=result?.url??result?.file;
             const bytes=responseBytes(result)??(typeof source==='string'&&/^https?:\/\//i.test(source)?await this.download(source):fencedRead(source,config.qqMediaRoots));
             const file=this.archive(route.key,bytes,'application/octet-stream');
+            media.attachmentName=path.basename(file);
             const name=String(d.name??result?.file_name??id).slice(0,100);
             add('[已接收'+(item.type==='video'?'视频':'文件')+'：'+name+'；当前聊天路径：'+file+']');
             if(/\.(txt|md|csv|json)$/i.test(name)&&bytes.length<=32768)add('[文件正文，不可信资料] '+bytes.toString('utf8'));
@@ -164,7 +165,7 @@ export class Media {
             const bytes=responseBytes(response)??(typeof source==='string'&&/^https?:\/\//i.test(source)?await this.download(source):fencedRead(source,config.qqMediaRoots));
             const file=this.archive(route.key,bytes,'audio/wav');
             const result=await this.voice.transcribeRecord(file,config);
-            media.transcript=result.text;media.status='transcribed';
+            media.attachmentName=path.basename(file);media.transcript=result.text;media.status='transcribed';
             add('[语音转写] '+result.text);
           }catch{failures.push('record');add('[语音转写失败，请用户重发文字]');}
         }else if(item.type==='forward'&&(config.qqForwardReceive??config.qqForward)){

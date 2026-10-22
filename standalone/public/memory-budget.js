@@ -11,7 +11,7 @@ export function estimateMemoryBudget(boot,pages,windowTokens=null){
   };
 }
 
-export function mountMemoryBudget(find){
+export function mountMemoryBudget(find,{key,personaId,request}={}){
   const block=document.createElement('div');block.className='policy-row memory-budget';
   const title=document.createElement('h3');title.textContent='预计上下文占用';
   const estimate=document.createElement('p');estimate.id='memory-budget-estimate';estimate.setAttribute('role','status');
@@ -48,4 +48,38 @@ export function mountMemoryBudget(find){
     find('override-'+key)?.addEventListener('change',update);
   }
   update();
+  const counters={};let stats=null,loading=false;
+  for(const field of ['memoryBootMaxChars','memoryPageMaxChars']){
+    const input=find('policy-'+field),box=document.createElement('div');box.className='memory-actual';box.setAttribute('role','status');
+    input.after(box);counters[field]=box;
+    input.addEventListener('input',paintActual);find('override-'+field)?.addEventListener('change',paintActual);
+  }
+  function paintActual(){
+    for(const [field,box]of Object.entries(counters)){
+      if(!stats){box.textContent=key?'正在读取当前人格资料…':'选择具体聊天后显示实际资料字符数；类型默认没有独立记忆库。';continue;}
+      const boot=field==='memoryBootMaxChars',actual=boot?stats.boot.chars:stats.pages.chars,budget=Number(find('policy-'+field).value);
+      const valid=Number.isSafeInteger(budget)&&budget>=1000,over=valid&&actual>budget;
+      box.dataset.warning=String(over);
+      box.textContent=`${stats.personaName} · 当前${boot?'启动资料':'有效记忆页全文'} ${format(actual)} 字符`+(valid?` / 预算 ${format(budget)} 字符`:'；请输入有效预算')+
+        (over?`。超出 ${format(actual-budget)} 字符，注入时会按预算选取或截断，原资料不会删除。`:valid?'。未超过当前预算。':'');
+      const detail=document.createElement('small');
+      detail.textContent=boot?stats.boot.files.map(f=>f.name+' '+format(f.chars)+' 字符').join('；')+(stats.boot.personaOutsideBudget?'；人设另行注入 '+format(stats.boot.personaOutsideBudget)+' 字符，不计入此预算。':''):
+        `共 ${stats.pages.count} 个有效页，排除 ${stats.pages.excluded} 个归档/合并页。按每页最多 ${format(stats.pages.perPageCap)} 字符计算，可注入候选正文共 ${format(stats.pages.candidateChars)} 字符；实际选页随查询变化。`;
+      box.append(detail);
+      if(!stats.exists)box.append(document.createTextNode(' 当前尚无已保存资料。'));
+    }
+  }
+  async function refreshActual(){
+    if(!key||!request||loading)return;loading=true;refreshButton.disabled=true;
+    try{
+      const result=await request('/api/memory-budget?'+new URLSearchParams({key,...(personaId?{personaId}:{})}));
+      if(!block.isConnected)return;stats=result;paintActual();
+      refreshed.textContent='统计更新于 '+new Date(stats.checkedAt).toLocaleTimeString()+'；按程序字符数统计，不是 token。';
+    }catch(error){if(block.isConnected){for(const box of Object.values(counters)){box.textContent='实际资料读取失败：'+error.message;box.dataset.warning='true';}refreshed.textContent='未取得最新统计，请重试。';}}
+    finally{loading=false;refreshButton.disabled=false;}
+  }
+  const refreshButton=document.createElement('button');refreshButton.type='button';refreshButton.className='secondary';refreshButton.textContent='刷新实际资料统计';refreshButton.hidden=!key;refreshButton.onclick=refreshActual;
+  const refreshed=document.createElement('small');refreshed.className='memory-stats-time';
+  counters.memoryPageMaxChars.after(refreshButton,refreshed);
+  paintActual();refreshActual();
 }

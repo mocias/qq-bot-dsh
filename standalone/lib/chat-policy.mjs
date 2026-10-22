@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 const bool=(label,section,kinds)=>({type:'boolean',label,section,kinds});
 const number=(label,section,min,max)=>({type:'number',label,section,min,max});
 export const policyFields={
-  userAwaySeconds:{...number('用户离开判定时长（秒）','会话与记忆',1,604800),help:'默认1800秒（30分钟）。只按最后一条真人消息计时；到期交接并整理记忆，成功后原会话恢复等待与模拟循环。同一次离开不重复整理，新来信后重新计时；模拟、机器人发言及预约不重置。'},
+  userAwaySeconds:{...number('用户离开判定时长（秒）','会话与记忆',1,604800),help:'默认600秒（10分钟）。按最后一条真人消息计时；启动整理后最多开启一个此时长的监听窗口。到期先安排活动的下次预约、交接整理，再进入休眠；新来信或已授权的DSH预约可唤醒。模拟、机器人发言及预约不重置真人离开计时。'},
   messageToolsEnabled:{...bool('消息查询与未读管理工具','消息功能'),help:'仅查询本机接入后保留的本聊天最近500条消息；允许群的未提及消息也进入索引，但不会因此自动回复。关闭后仍保留原生聊天的基本发送与等待能力。'},
   quoteMode:{type:'select',label:'引用回复',section:'消息功能',options:{auto:'按需引用',never:'不发送引用',always:'普通回复默认引用当前消息'}},
   mentionSend:bool('允许群内 @ 指定成员','消息功能',['group']),

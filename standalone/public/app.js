@@ -1,3 +1,4 @@
+import {qrLoginWatcher} from './qr-login.js';
 import {mountPromptEditor} from './prompt-editor.js';
 import {renderHealth,renderGraph} from './memory-viewer.js';
 import {mountMemoryBudget} from './memory-budget.js';
@@ -5,6 +6,8 @@ const $=id=>document.getElementById(id);
 let chatContext={kind:'',key:'',personaId:''},contextTargets=[],contextBusy=false,pageLoad=0;
 const inContext=key=>!chatContext.kind||key.split('/')[1]===chatContext.kind;
 function paintContext(){
+  const active=contextTargets.find(t=>t.key===chatContext.key);const card=active?.cards.find(c=>c.id===chatContext.personaId);
+  $('editing-chat-label').textContent=chatContext.key?chatLabel(chatContext.key)+' · '+(card?.name||'当前人格')+(active&&chatContext.personaId!==active.activeId?'（预览，未绑定）':'（实际绑定）'):(chatContext.kind==='private'?'私聊默认配置':chatContext.kind==='group'?'群聊默认配置':'全局默认配置');
   $('context-kind').value=chatContext.kind;
   const targets=contextTargets.filter(t=>inContext(t.key));
   $('context-target').replaceChildren(new Option('类型默认 / 全部对象',''),...targets.map(t=>new Option(chatLabel(t.key),t.key)));
@@ -76,14 +79,14 @@ function paintPolicy(data){
   policyData={...data,savedPatch:data.savedPatch??(data.scope===data.kind?data.effective:data.override)};
   const specific=data.scope!==data.kind,container=$('policy-fields');container.replaceChildren();
   const cards=new Map();
-  $('policy-context').textContent=(specific?'只影响此聊天；未勾选“单独设置”的项目继承'+(data.kind==='group'?'群聊':'私聊')+'默认值。':'作为'+(data.kind==='group'?'所有群聊':'所有私聊')+'的默认规则；独立覆盖的字段优先。')+' 新工作区在首次开启对话时按“日期-群聊/私聊-号码-人格名称”创建；已有工作区和会话轮换继续沿用原目录。';
+  $('policy-context').textContent=(specific?'只影响此聊天；未勾选“单独设置”的项目继承'+(data.kind==='group'?'群聊':'私聊')+'默认值。':'作为'+(data.kind==='group'?'所有群聊':'所有私聊')+'的默认规则；独立覆盖的字段优先。')+'';
   $('policy-reset').textContent=specific?'清除本聊天覆盖，全部继承':'恢复升级时的默认规则';
   $('policy-delete').hidden=!specific;$('target-remove').hidden=!specific;
   $('policy-delete').disabled=!Object.keys(data.override).length;
   for(const option of $('policy-scope').options)if(option.value.includes('/'))option.textContent=chatLabel(option.value)+(data.overriddenScopes?.includes(option.value)?' · 独立设置':' · 继承默认');
   $('policy-state').textContent=policyDrafts.has(data.scope)?'有未保存修改；切换聊天会暂存草稿。':'已加载保存的设置。';
   for(const [key,spec] of Object.entries(data.fields)){
-    if(!cards.has(spec.section)){const card=element('article');card.className='card';card.append(element('h2',spec.section));cards.set(spec.section,card);container.append(card);}
+    if(!cards.has(spec.section)){const card=element('details');card.className='card policy-section';card.append(element('summary',spec.section));cards.set(spec.section,card);container.append(card);}
     const row=element('div');row.className='policy-row';
     const label=element('label',spec.label);label.htmlFor='policy-'+key;
     const input=element(spec.type==='ids'?'textarea':spec.type==='select'?'select':'input');input.id='policy-'+key;
@@ -106,20 +109,20 @@ function paintPolicy(data){
     cards.get(spec.section).append(row);
   }
   $('policy-save').disabled=false;$('policy-reset').disabled=false;
-  mountMemoryBudget($);
+  mountMemoryBudget($,{key:specific?data.scope:null,personaId:chatContext.key===data.scope?chatContext.personaId:undefined,request});
   const updateQuiet=()=>{for(const key of ['voiceQuietStart','voiceQuietEnd'])$('policy-'+key).closest('.policy-row').hidden=$('policy-voiceQuietMode').value!=='scheduled';};
   $('policy-voiceQuietMode').addEventListener('change',updateQuiet);
   $('override-voiceQuietMode')?.addEventListener('change',updateQuiet);updateQuiet();
   if(specific){
-    const card=element('article');card.className='card';
-    card.append(element('h2','消息与参与状态'),element('p','仅本聊天。未读是机器人本地处理进度，不是 QQ 客户端的已读回执；最多保留最近 500 条。'));
+    const card=element('details');card.className='card policy-section';
+    card.append(element('summary','消息与参与状态'),element('p','仅本聊天。未读是机器人本地处理进度，不是 QQ 客户端的已读回执；最多保留最近 500 条。'));
     const state=element('p','正在读取未读和潜水状态……'),preview=element('pre'),actions=element('div');
     actions.className='actions';preview.className='chat-inbox-preview';state.setAttribute('role','status');
     const key=data.scope;
     const refresh=async()=>{
       const value=await request('/api/chat-state?key='+encodeURIComponent(key));
       state.textContent=`未读 ${value.unreadCount} 条；${value.sleeping?'潜水至 '+new Date(value.wake.until).toLocaleString():'活跃'}。`+(value.truncatedBeforeSeq?'更早记录已超出保留上限。':'');
-      preview.textContent=value.messages.map(m=>`#${m.seq} · ${m.sender}：${m.text}${m.textTruncated?'（摘要）':''}`).join('\n');
+      preview.textContent=value.messages.map(m=>`#${m.seq} · ${m.sender?.nickname||m.sender?.qq||m.sender}：${m.text}${m.textTruncated?'（摘要）':''}`).join('\n');
     };
     for(const [label,mode]of [['刷新状态',null],['潜水 1800 秒','diving'],['立即唤醒','active']]){
       const button=element('button',label);button.type='button';button.className='secondary';
@@ -312,12 +315,14 @@ async function refresh(){const status=await request('/api/status');qqBackendMode
 async function action(button,work){button.disabled=true;notice('正在处理，请稍候…');try{await work();if($('notice').textContent==='正在处理，请稍候…')notice('操作已完成。');}catch(error){notice(error.message,true);}finally{button.disabled=false;if(button.id==='persona-apply'&&managementData)paintPersonaCards(managementData);if(button.id.startsWith('voice-profile-'))updateProfileButtons();if(button.id==='reference-delete')button.disabled=!$('mimoReferenceId').value;if(button.id==='reference-restore')button.disabled=$('reference-deleted').options.length<=1;await refresh().catch(()=>{});if(button.id.startsWith('qq-version-'))paintVersionActions();}}
 const promptEditor=mountPromptEditor({request,notice,getContext:()=>chatContext,onSelect:setContext});
 const pages={
+  directory:['聊天列表','按聊天对象管理人格、模型与接收状态。'],
   voice:['语音与通话','选择语音服务、配置音色，让每个人格拥有自己的声音。'],
   connections:['连接与配置','连接 DSH，选择 QQ 接入方式和允许的聊天。'],
   prompts:['提示词配置','查看和修改共用规则，为每个人格设置独立覆盖。'],
   chat:['会话与聊天','管理会话轮换、多媒体消息、主动搭话与群聊能力。'],
   manage:['人设与记忆','查看记忆库，管理聊天人设、长期记忆、表情与黑话。'],
   qq:['QQ 控制','准备 QQ 组件、扫码登录，核验账号后手动启用接收。'],
+  messages:['QQ 消息监控','查看私聊、群聊及各人格的收发记录。'],
   logs:['运行日志','查看本服务的运行事件、处理结果与故障记录。'],
   manual:['说明书',''],
 };
@@ -325,18 +330,21 @@ for(const tab of document.querySelectorAll('[data-tab]'))tab.addEventListener('c
   if(contextBusy||promptEditor.isBusy()||manageBusy)return;
   const navigation=++pageLoad;
   const name=tab.dataset.tab;
+  if(name!=='qq')qrWatcher.stop();
   for(const page of Object.keys(pages))$(page+'-tab').hidden=page!==name;
   document.querySelectorAll('[data-tab]').forEach(x=>{x.classList.toggle('active',x===tab);x.setAttribute('aria-current',x===tab?'page':'false');});
   [$('page-title').textContent,$('page-subtitle').textContent]=pages[name];notice('');
   $('page-context').textContent=pages[name][0];
   window.scrollTo({top:0});
   $('chat-context').hidden=!['chat','prompts','manage'].includes(name);
-  $('model-settings').hidden=!['chat','manage'].includes(name);
+  $('model-settings').hidden=name!=='chat';
   if(['chat','prompts','manage'].includes(name)){
     try{await loadContextTargets();if(navigation!==pageLoad||name==='manage'&&memoryDirty())return;await applyContext();}catch(e){if(navigation===pageLoad)notice(e.message,true);}
   }
+  if(name==='directory')loadDirectory().catch(e=>notice(e.message,true));
   if(name==='qq')refreshQQ().catch(e=>notice(e.message,true));
-  if(name==='logs')loadLogs().catch(e=>notice(e.message,true));
+  if(name==='logs'){loadLogs().catch(e=>notice(e.message,true));refreshQQ().catch(e=>notice(e.message,true));}
+  if(name==='messages')refreshMessages().catch(e=>notice(e.message,true));
   if(name==='connections')checkNativePlugin();
 });
 for(const formId of ['config-form'])$(formId).addEventListener('submit',event=>{
@@ -376,20 +384,21 @@ function shellReceiveGate(data){
  return {allowed:true,reason:''};
 }
 function paintChannels(bridge){
- const running=bridge.state==='running',connecting=bridge.state==='connecting',channels=bridge.channels??{};
+ const running=bridge.state==='running',connecting=bridge.state==='connecting',channels=bridge.channels??{},allChannels=bridge.allChannels??channels;
  const receiveBlocked=qqBackendMode==='shell'&&qqShellReceiveState?.allowed!==true;
  const receiveReason=receiveBlocked?(qqShellReceiveState?.reason||'QQ Shell 组件与进程状态尚未核实，接收保持停止。'):'';
- const text='私聊：'+(running&&channels.private?'接收中':'已停止')+' · 群聊：'+(running&&channels.group?'接收中':'已停止');
+ const channelLabel=kind=>running&&channels[kind]?(allChannels[kind]?'全部接收中':'部分聊天接收中'):'已停止';
+ const text='私聊：'+channelLabel('private')+' · 群聊：'+channelLabel('group');
  const phases={preparing:'准备整理',digesting:'整理记录',greeting:'旧版招呼阶段（已停用）',publishing:'旧版招呼发送记录',failed:'启动暂停',uncertain:'发送待核实'};
  const startup=(bridge.startups??[]).filter(s=>phases[s.phase]).map(s=>`${s.key.includes('/group/')?'群':'私聊'} ${s.key.split('/').at(-1)}：${phases[s.phase]}${s.batches?' '+s.completed+'/'+s.batches:''} · 排队 ${s.queued} 条`).join('；');
  const detail=(receiveReason?receiveReason+' · ':'')+text+' · 待处理：'+bridge.active+(startup?' · '+startup:'');
  $('bridge-detail').textContent=(bridge.lastError?bridge.lastError+' · ':'')+detail;
  $('qq-control-bridge').textContent=detail;
  for(const prefix of ['', 'qq-control-']){
-  $(prefix+'start').disabled=receiveBlocked||connecting||(running&&channels.private&&channels.group);
+  $(prefix+'start').disabled=receiveBlocked||connecting||(running&&allChannels.private&&allChannels.group);
   $(prefix+'stop').disabled=bridge.state==='stopped';
   for(const kind of ['private','group']){
-   $(prefix+'start-'+kind).disabled=receiveBlocked||connecting||!!(running&&channels[kind]);
+   $(prefix+'start-'+kind).disabled=receiveBlocked||connecting||!!(running&&allChannels[kind]);
    $(prefix+'stop-'+kind).disabled=connecting||!(running&&channels[kind]);
   }
  }
@@ -576,8 +585,8 @@ $('persona-card-create').onclick=()=>action($('persona-card-create'),async()=>{
  if(memoryDirty())throw Error('请先保存当前人格的修改，再创建新卡');
  const {key}=managedInput();manageBusy=true;
  try{const data=await request('/api/persona-cards/create',{key,name:$('persona-card-name').value,revision:managementData.personas.revision});
-   managementData=null;paintManaged(data);$('persona-card-name').value='';notice('人格卡已创建，可在下方编辑人设；尚未切换使用。');
- }finally{manageBusy=false;}
+   managementData=null;paintManaged(data);setContext({key,personaId:data.detail.personaId});$('persona-card-name').value='';$('persona-create-dialog').close();notice('人格卡已创建，可在下方编辑人设；尚未切换使用。');
+ }catch(error){$('persona-create-error').textContent=error.message;throw error;}finally{manageBusy=false;}
 });
 $('persona-apply').onclick=()=>action($('persona-apply'),async()=>{
  if(manageBusy)throw Error('请等待当前保存完成');
@@ -671,7 +680,9 @@ for(const verb of ['install','activate','rollback'])$('qq-version-'+verb).onclic
  catch(error){$('qq-version-result').textContent='操作未完成：'+error.message;await refreshQQ().catch(()=>{});throw error;}
  finally{qqVersionBusy=false;paintVersionActions();}
 });
-async function refreshQQ(){
+let qqRefreshPending=null;
+function refreshQQ(){if(qqRefreshPending)return qqRefreshPending;qqRefreshPending=readQQStatus().finally(()=>{qqRefreshPending=null;});return qqRefreshPending;}
+async function readQQStatus(){
  qqBackendMode=$('qqBackend').value||qqBackendMode;if(qqBackendMode==='shell'){qqShellReceiveState={allowed:false,reason:'QQ Shell 组件与进程状态正在核实，接收暂不可用。'};}
  const data=await request('/api/qq/control/status',{});
  const shell=data.backend==='shell';document.querySelectorAll('#qq-tab [data-qq-backend]').forEach(el=>{el.hidden=el.dataset.qqBackend!==(shell?'shell':'external');});
@@ -685,18 +696,31 @@ async function refreshQQ(){
  const packet=data.runtime?.capabilities?.packet,packetLabels={ready:'PacketBackend 检查就绪；拍一拍实际投递未验证',unavailable:'高级接口暂不可用',unsupported:'当前版本不支持高级接口检查',timeout:'高级接口检查超时',unknown:'高级接口状态未知'};
  $('qq-runtime-capabilities').textContent=shell?(packetLabels[packet?.state]||'高级接口尚未检查；文字接口状态单独核验'):'';
  $('qq-control-account').textContent='面板指定账号：'+(data.expectedAccount||'未配置')+' · 当前登录：'+(data.account||'未知')+' · 登录管理：'+(data.napcatReady?'可用':'不可用')+' · 消息接口：'+(data.interfaceOnline?'在线':'未连接');
- if(data.online){$('qq-qr-result').hidden=true;$('qq-qr-image').removeAttribute('src');}
+ if(data.online){qrWatcher.stop();$('qq-qr-result').hidden=true;$('qq-qr-image').removeAttribute('src');}
  $('qq-qrcode').disabled=!!data.online;
+ $('qq-login-card').hidden=!!data.online;
  const status=await request('/api/status');
  $('qq-control-bridge').textContent='机器人接收：'+(status.bridge.state==='running'?'运行中':status.bridge.state==='connecting'?'连接中':'已停止')+' · 待处理：'+status.bridge.active;
  paintChannels(status.bridge);
+ paintQQMonitor(data,status);
+ try{const logs=await request('/api/logs');paintQQMonitorEvents(logs.entries??[]);}catch{$('qq-monitor-events').textContent='事件暂时读取失败';}
 }
 $('qq-control-refresh').onclick=()=>action($('qq-control-refresh'),refreshQQ);
 for(const [id,verb]of [['qq-runtime-prepare','prepare'],['qq-runtime-start','start'],['qq-runtime-stop','stop']])$(id).onclick=()=>action($(id),async()=>{const result=await request('/api/qq/runtime/'+verb,{});notice(result.message||'操作完成，请查看当前状态。');await refreshQQ();});
 for(const [id,url]of [['qq-control-desktop','/api/qq/desktop-start'],['qq-control-sync','/api/qq/sync'],['qq-control-start','/api/bridge/start'],['qq-control-stop','/api/bridge/stop']])$(id).onclick=()=>action($(id),async()=>{const result=await request(url,{});notice(result.message||'操作已完成。');await refreshQQ();});
-$('qq-qrcode').onclick=()=>action($('qq-qrcode'),async()=>{
- const result=await request('/api/qq/control/qrcode',{});$('qq-qr-image').src=result.image;$('qq-qr-message').textContent=result.message;$('qq-qr-result').hidden=false;
+const qrWatcher=qrLoginWatcher({
+ load:()=>request('/api/qq/control/qrcode',{watch:true}),
+ isVisible:()=>!$('qq-tab').hidden&&!document.hidden,
+ render:result=>{
+   $('qq-qr-result').hidden=false;$('qq-qr-message').textContent=result.message;
+   $('qq-qr-image').hidden=!result.image;
+   if(result.image){if($('qq-qr-image').getAttribute('src')!==result.image)$('qq-qr-image').src=result.image;}
+   else $('qq-qr-image').removeAttribute('src');
+ },onLogin:refreshQQ
 });
+$('qq-qrcode').onclick=()=>action($('qq-qrcode'),()=>qrWatcher.start());
+window.addEventListener('pagehide',()=>qrWatcher.stop());
+document.addEventListener('visibilitychange',()=>{if(document.hidden)qrWatcher.stop();else if(!$('qq-tab').hidden&&!$('qq-qr-result').hidden)qrWatcher.start();});
 $('qq-contact-kind').onchange=()=>{$('qq-contact').replaceChildren();$('qq-contact-add').disabled=true;$('qq-contact-state').textContent='请读取所选类型的列表。';};
 $('qq-contacts-load').onclick=()=>action($('qq-contacts-load'),async()=>{
  const kind=$('qq-contact-kind').value,result=await request('/api/qq/control/contacts',{kind});if(kind!==$('qq-contact-kind').value)return;
@@ -726,7 +750,7 @@ function showModelSelection(value){
  $('chat-model').value=encoded;$('model-context-window').value=value.contextWindow??0;
 }
 async function loadModelSettings(page){
- $('model-settings').hidden=!['chat','manage'].includes(page);if($('model-settings').hidden)return;
+ $('model-settings').hidden=page!=='chat';if($('model-settings').hidden)return;
  const serial=++modelLoadSerial,input=modelScopeInput(),query=new URLSearchParams(Object.entries(input).filter(([,v])=>v));
  const data=await request('/api/model-profiles?'+query);if(serial!==modelLoadSerial)return;
  modelProfileData=data;$('model-scope').textContent=input.key?'当前聊天人格：'+chatLabel(input.key):input.kind?(input.kind==='private'?'私聊':'群聊')+'默认模型':'全局默认模型';
@@ -748,3 +772,120 @@ $('model-settings-save').onclick=()=>action($('model-settings-save'),async()=>{
  modelProfileData=await request('/api/model-profiles',{...input,revision:modelProfileData.revision,settings});
  $('model-settings-state').textContent='已保存，后续新建会话使用此配置；当前会话不变。';
 });
+function paintQQMonitor(data,status){
+ const b=status.bridge,box=$('qq-monitor-overview');box.replaceChildren();
+ const time=v=>v?new Date(v).toLocaleString():'暂无记录';
+ for(const [label,value] of [['登录账号',data.account||'未登录'],['账号核验',data.online?(data.accountMatches?'一致':'不一致'):'等待登录'],['消息接口',data.interfaceOnline?'在线':'未连接'],['私聊接收',b.state==='running'&&b.channels?.private!==false?'运行中':'停止'],['群聊接收',b.state==='running'&&b.channels?.group!==false?'运行中':'停止'],['待处理任务',String(b.active??0)],['最近接收',time(b.lastReceivedAt)],['最近发送',time(b.lastSentAt)]])box.append(element('p',label+'：'+value));
+ const chats=$('qq-monitor-chats');chats.replaceChildren();
+ const rows=(status.lifecycle??[]).filter(s=>s.activePersona);
+ if(!rows.length)chats.append(element('p','暂无已建立的聊天会话。登录不代表已开启机器人接收。'));
+ for(const row of rows){const stopped=b.state!=='running'||b.channels?.[row.key.split('/')[1]]===false||(Array.isArray(b.chatKeys)&&!b.chatKeys.includes(row.key));const state=stopped?'接收停止':row.blocked?'等待恢复':row.maintenance?'整理记忆':({active:'等待或对话中',handoff:'保存交接',digest:'整理记忆',asleep:'休眠'}[row.absence?.phase]??'就绪');chats.append(element('p',chatLabel(row.key)+' · '+(row.title||'默认人格会话')+' · '+state));}
+ $('qq-monitor-updated').textContent='更新于 '+new Date().toLocaleTimeString()+' · 此页每 5 秒检查状态；不自动启动接收。';
+}
+function paintQQMonitorEvents(entries){const box=$('qq-monitor-events');box.replaceChildren();const rows=entries.filter(e=>!e.event.startsWith('rpc.')&&e.operation!=='/api/qq/control/status'&&e.operation!=='/api/qq/control/qrcode').slice(-12).reverse();if(!rows.length)box.append(element('p','暂无事件'));for(const e of rows)box.append(element('p',new Date(e.time).toLocaleTimeString()+' · '+(e.level==='error'?'错误 · ':e.level==='warn'?'提醒 · ':'')+(logNames[e.event]??e.event)));}
+setInterval(()=>{if(!$('logs-tab').hidden&&!document.hidden)refreshQQ().catch(()=>{$('qq-monitor-updated').textContent='状态更新失败，当前展示为旧数据；稍后自动重试。';});},5000);
+let monitorSelection=null,monitorBefore,monitorSerial=0,monitorBusy=false,monitorFingerprint="";
+async function refreshMessages(older=false){
+ const serial=++monitorSerial,selection=monitorSelection?{...monitorSelection}:null;
+ const query=new URLSearchParams(selection??{});if($('monitor-search').value)query.set('query',$('monitor-search').value);if(older&&monitorBefore)query.set('before',String(monitorBefore));
+ const data=await request('/api/message-monitor?'+query);if(serial!==monitorSerial||$('messages-tab').hidden)return;
+ const list=$('monitor-conversations');list.replaceChildren();
+ const kind=$('monitor-kind').value;
+ for(const chat of data.chats.filter(c=>!kind||c.key.split('/')[1]===kind)){
+   const button=element('button',chatLabel(chat.key)+' · '+chat.name+(chat.active?' · 当前人格':' · 历史人格')+'\n'+chat.count+' 条 · 机器人未读 '+chat.unread+'\n'+chat.preview);button.className='monitor-conversation secondary';
+   button.setAttribute('aria-pressed',String(selection?.key===chat.key&&selection?.personaId===chat.personaId));
+   button.onclick=()=>{monitorSelection={key:chat.key,personaId:chat.personaId};monitorBefore=undefined;refreshMessages().catch(e=>notice(e.message,true));};list.append(button);
+ }
+ if(!list.children.length)list.append(element('p','当前账号暂无接入记录。'));
+ const box=$('monitor-messages');const fingerprint=JSON.stringify([selection,$('monitor-search').value,data.messages]);if(!older&&fingerprint===monitorFingerprint)return;monitorFingerprint=fingerprint;const scrollTop=box.scrollTop;if(!older)box.replaceChildren();
+ if(selection){
+   const chat=data.chats.find(c=>c.key===selection.key&&c.personaId===selection.personaId);$('monitor-title').textContent=chatLabel(selection.key)+' · '+(chat?.name??'人格');
+   const fragment=document.createDocumentFragment();
+   for(const m of data.messages??[]){
+     const article=document.createElement('article');article.className='monitor-message'+(m.outgoing?' outgoing':'');
+     article.append(element('p',(m.outgoing?'发出':'收到')+' · '+(m.sender?.card||m.sender?.nickname||m.sender?.qq||'未知发送者')+' '+(m.sender?.qq??'')+' · '+new Date(m.at).toLocaleString()+' · '+(m.outgoing?'已发送':m.unread?'机器人未读':'机器人已读')));
+     if(m.replyTo)article.append(element('blockquote','引用消息 '+(m.replyTo.messageId??'')+(m.replyTo.text?'：'+m.replyTo.text:'')));
+     article.append(element('div',m.text||''));
+     for(const part of m.segments??[])article.append(element('span',part.kind==='at'?' @'+part.id:' [QQ 表情 '+part.id+']'));
+     for(const media of m.media??[]){
+       const labels={image:'图片',record:'语音',video:'视频',file:'文件',forward:'合并转发',face:'QQ 表情',json:'分享卡片',xml:'分享卡片'};
+       article.append(element('p',(labels[media.kind]??media.kind)+(media.transcript?'：'+media.transcript:'')));
+       if(media.url&&media.kind==='image'){const img=document.createElement('img');img.src=media.url;img.alt='消息图片';img.loading='lazy';img.onerror=()=>{img.replaceWith(element('p','图片缓存已清理或不可用'));};article.append(img);}
+       else if(media.url&&media.kind==='record'){const audio=document.createElement('audio');audio.controls=true;audio.preload='none';audio.src=media.url;article.append(audio);}
+       else if(media.url){const a=element('a','下载附件');a.href=media.url;a.download=media.name;article.append(a);}
+       else article.append(element('small','无可展示的本机附件缓存'));
+     }
+     for(const f of m.forwards??[])article.append(element('blockquote',(f.sender?.nickname||f.sender?.qq||'转发消息')+'：'+(f.text??'')));
+     fragment.append(article);
+   }
+   if(older)box.prepend(fragment);else {box.append(fragment);box.scrollTop=scrollTop;}
+   monitorBefore=data.messages?.[0]?.seq; $('monitor-older').hidden=!data.hasMore;
+   if(!box.children.length)box.append(element('p','暂无匹配消息。'));
+   $('monitor-state').textContent='更新于 '+new Date().toLocaleTimeString()+(data.truncated?' · 更早记录已超过本地保留范围':'')+' · 查看不消耗机器人未读。';
+ }else $('monitor-state').textContent='选择左侧聊天查看消息。';
+}
+$('monitor-kind').onchange=()=>{monitorSelection=null;monitorBefore=undefined;$('monitor-messages').replaceChildren();$('monitor-title').textContent='请选择聊天';$('monitor-older').hidden=true;refreshMessages().catch(e=>notice(e.message,true));};
+$('monitor-search').oninput=()=>{monitorBefore=undefined;refreshMessages().catch(e=>notice(e.message,true));};
+$('monitor-refresh').onclick=()=>refreshMessages().catch(e=>notice(e.message,true));
+$('monitor-older').onclick=()=>{$('monitor-live').checked=false;refreshMessages(true).catch(e=>notice(e.message,true));};
+setInterval(async()=>{if(monitorBusy||$('messages-tab').hidden||document.hidden||!$('monitor-live').checked)return;monitorBusy=true;try{await refreshMessages();}catch{$('monitor-state').textContent='更新失败，当前为旧数据；稍后重试。';}finally{monitorBusy=false;}},3000);
+let directoryRows=[],directoryLoad=0;
+const directoryModel=s=>s?.model?(s.provider+' / '+s.model):'沿用 DSH 默认';
+const directoryWindow=s=>s?.contextWindow?new Intl.NumberFormat('zh-CN').format(s.contextWindow)+' tokens':'模型默认窗口';
+async function loadDirectory(){const serial=++directoryLoad;const data=await request('/api/chat-directory');if(serial!==directoryLoad)return;directoryRows=data.rows;paintDirectory();}
+function paintDirectory(){
+ const body=$('directory-rows');body.replaceChildren();const query=$('directory-search').value.trim().toLowerCase(),kind=$('directory-kind').value;
+ const rows=directoryRows.filter(r=>(!kind||r.kind===kind)&&(!query||(r.id+' '+r.personaName).toLowerCase().includes(query)));
+ $('directory-status').textContent=directoryRows.length?'已接入 '+directoryRows.length+' 个聊天 · 当前显示 '+rows.length+' 个。可逐行启停，批量开关位于 QQ 控制。':'尚未接入聊天，点击“添加聊天”配置好友或群。';
+ for(const row of rows){
+  const tr=document.createElement('tr');
+  const cell=()=>{const td=document.createElement('td');tr.append(td);return td;};
+  const target=cell();target.append(element('strong',row.id),element('small',row.kind==='group'?'群聊':'私聊'));
+  const persona=cell();persona.append(element('strong',row.personaName+(row.shared?' · 共享':'')));
+  const details=document.createElement('details');details.append(element('summary','更换绑定人格'));
+  const select=document.createElement('select');select.setAttribute('aria-label',row.id+' 绑定人格');for(const card of row.cards)select.add(new Option(card.name,card.id));select.value=row.personaId;
+  const save=element('button','保存绑定');save.className='secondary';save.disabled=!row.canAssign;
+  const hint=element('p',row.canAssign?'选择后保存，才会改变实际使用的人格。':'请先停止此聊天接收，并等待任务结束。');hint.className='hint';
+  save.onclick=()=>action(save,async()=>{await request('/api/persona-cards/assign',{key:row.key,personaId:select.value,revision:row.revision});await loadDirectory();notice('已更新 '+row.id+' 的人格绑定；原人设与记忆保留。');});
+  details.append(select,save,hint);persona.append(details);
+  const model=cell();model.append(element('strong',directoryModel(row.configuredModel)),element('small',directoryWindow(row.configuredModel)));
+  if(row.currentModel&&JSON.stringify(row.currentModel)!==JSON.stringify(row.configuredModel))model.append(element('small','现有会话：'+directoryModel(row.currentModel)+' · '+directoryWindow(row.currentModel)+'；以上配置用于新会话'));
+  if(row.modelWarnings.length)model.append(element('small','现有会话存在模型降级告警，请查看日志'));
+  const state=cell();state.append(element('span',row.state==='receiving'?'接收中':row.state==='connecting'?'连接中':'已停止'));if(row.busy)state.append(element('small','有待完成任务'));
+  const toggle=element('button',row.receiving?'停止此聊天':'启动此聊天');toggle.className=row.receiving?'secondary':'primary';toggle.disabled=row.state==='connecting'||(!row.receiving&&row.busy);toggle.style.marginTop='10px';
+  toggle.onclick=()=>action(toggle,async()=>{await request('/api/bridge/'+(row.receiving?'stop':'start'),{key:row.key,personaId:row.personaId});await loadDirectory();notice(row.id+(row.receiving?' 已停止，其他聊天继续运行。':' 已启动，仅使用该聊天当前绑定的人格。'));});state.append(toggle);
+  const controls=cell();for(const [label,page]of [['配置此聊天','manage'],['模型与规则','chat'],['提示词','prompts']]){const b=element('button',label);b.className='secondary';b.onclick=()=>openDirectoryChat(row,page).catch(e=>notice(e.message,true));controls.append(b);}
+  body.append(tr);
+ }
+}
+async function openDirectoryChat(row,page){
+ if(contextBusy||manageBusy||promptEditor.isBusy())return;
+ if(memoryDirty()&&!await confirmAction('当前人设或记忆有未保存修改，放弃后切换聊天？'))return;
+ if(memoryDirty()){managementData=null;loadedKey='';$('manage-content').hidden=true;}
+ stashPolicy();await loadContextTargets();
+ setContext(row.key?{key:row.key,personaId:row.personaId}:{kind:row.kind||''});
+ $('context-advanced').open=false;
+ document.querySelector('[data-tab="'+page+'"]').click();
+}
+$('directory-search').oninput=paintDirectory;$('directory-kind').onchange=paintDirectory;
+$('directory-refresh').onclick=()=>action($('directory-refresh'),loadDirectory);
+$('directory-back').onclick=()=>document.querySelector('[data-tab="directory"]').click();
+$('directory-add').onclick=()=>document.querySelector('[data-tab="qq"]').click();
+$('directory-default-model').onclick=()=>openDirectoryChat({},'chat');
+$('directory-private-default').onclick=()=>openDirectoryChat({kind:'private'},'chat');
+$('directory-group-default').onclick=()=>openDirectoryChat({kind:'group'},'chat');
+for(const button of document.querySelectorAll('[data-detail-page]'))button.onclick=()=>document.querySelector('[data-tab="'+button.dataset.detailPage+'"]').click();
+loadDirectory().catch(e=>notice(e.message,true));
+
+setInterval(()=>{if(!$('directory-tab').hidden&&!document.hidden&&!$('directory-rows').querySelector('details[open]')&&!contextBusy&&!manageBusy)loadDirectory().catch(()=>{$('directory-status').textContent='状态更新失败，请刷新列表。';});},5000);
+
+$('persona-create-open').onclick=()=>{
+ if(manageBusy||!managementData||!loadedKey){notice('请先选择聊天并等待资料加载完成。',true);return;}
+ if(memoryDirty()){notice('请先保存当前人格的修改，再创建新卡。',true);return;}
+ $('persona-create-error').textContent='';$('persona-card-name').value='';
+ $('persona-create-target').textContent='所属聊天：'+chatLabel(loadedKey);
+ $('persona-card-create').disabled=false;$('persona-create-dialog').showModal();$('persona-card-name').focus();
+};
+for(const id of ['persona-create-close','persona-create-cancel'])$(id).onclick=()=>{if(!manageBusy)$('persona-create-dialog').close();};
+$('persona-create-dialog').addEventListener('cancel',event=>{if(manageBusy)event.preventDefault();});
+$('persona-create-form').onsubmit=event=>{event.preventDefault();if(!manageBusy)$('persona-card-create').click();};

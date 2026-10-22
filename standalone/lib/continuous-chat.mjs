@@ -9,10 +9,10 @@ export const CONTINUOUS_POLICY=`持续对话规则（覆盖旧的发送后结束
 - 【首答前】先读已有消息。普通群聊先qq_wait_for_messages({purpose:"reply",quietSeconds:10,timeoutSeconds:30})等对方补充，按最后来信补足静默，读取和思考花掉的时间也算；quiet=true才表示已安静足够。它把连发消息合起来交给你，不要求每条回应。quiet=false只是最长预算到了，对方可能仍在说；看完消息再决定接话或继续等。明确紧急问题或被点名可先简短回应，不必死等。
 - 【等下文】对方明显没说完，或来了多条消息，用purpose:"reply",quietSeconds:10～15,timeoutSeconds:60～120等完再回；热闹时抓最近5～10条的重点，挑最相关的一处接，不逐条点评，也不串错不同人的话题。
 - 【回复后】不要立刻结束，先qq_wait_for_messages({purpose:"messages",timeoutSeconds:30})等可能的回复。新消息或当前子任务通知会提前唤醒；收到新消息先看上下文，连发未完可再做短静默，再决定是否发送。无需等满倒计时才理解消息，也不要为了回复而回复。
-- 【暂时不回复】用qq_wait_for_messages继续等，不调用qq_no_reply结束普通聊天。明确告别也可以保持安静等待，不要继续追问；不需要周期性发言。等待可以反复调用，持续对话没有总时长和累计轮数限制。
+- 【暂时不回复】用qq_wait_for_messages继续等，不调用qq_no_reply结束普通聊天。明确告别也可以保持安静等待，不要继续追问；不需要周期性发言。真人仍在聊天时可以继续等待；达到宿主离开阈值后必须收尾休眠。
 - 【重复等待提醒】qq_wait_for_messages是长轮询，重复相同参数属于正常持续监听。宿主通用的重复调用提醒不表示聊天结束；每次先检查等待结果，处理新消息或角色推演，没有其他事情就继续等待，不必为了改变调用而查询、发言或结束。
 - 【真实世界模拟】每次消息投递附带此字段；距离上次消息或模拟提示投递满60秒，等待会以reason=world-simulation提前返回新提示。每次定时推演必须调用qq_role_state_update保存活动、情绪、注意力、进展和下一步，作为本人格正式经历写入长期记忆；成功后继续等待，不必发QQ。若返回role-state-required，先按给定id保存，不能跳过。新消息投递会重新计算这60秒；模型忙碌或整理期间提醒延后合并，不中断工作。
-reason=subagent表示DSH收件箱已收到子任务通知，正文在后续步骤注入，不要将唤醒提示当作研究结论。等待超时不是错误，不因此重复查询；没有值得回应的新内容就保持沉默。每次timeoutSeconds为1～${MAX_WAIT_SECONDS}秒，省略默认30秒；这是单次等待倒计时，不是对话时限。持续对话没有总时长、累计消息数、累计发送数或工具调用次数上限，可以持续等待。明确停止或连接失效仍结束执行，不保证子任务跨停止、重启继续回传。`;
+reason=subagent表示DSH收件箱已收到子任务通知，正文在后续步骤注入，不要将唤醒提示当作研究结论。等待超时不是错误，不因此重复查询；没有值得回应的新内容就保持沉默。每次timeoutSeconds为1～${MAX_WAIT_SECONDS}秒，省略默认30秒；这是单次等待倒计时，不是对话时限。不按累计消息数、发送数或工具次数终止；真人空闲达到宿主阈值时必须交接休眠，不能无限空等。明确停止或连接失效仍结束执行，不保证子任务跨停止、重启继续回传。`;
 
 // Incoming routes stay queued until a tool actually exposes them to the parent.
 // Anything left at turn end is returned to the existing dispatcher.

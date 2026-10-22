@@ -70,7 +70,7 @@ test('memory download requires panel authentication and an explicit valid person
   app.bridge.state.sessions.old={id:'old',route:{key,group:true,id:'100000002'}};
   assert.equal(app.bridge.config,undefined);
   const status=await fetch(origin+'/api/status',{headers});assert.equal(status.status,200);
-  assert.equal((await status.json()).lifecycle[0].absence.thresholdSeconds,1800);
+  assert.equal((await status.json()).lifecycle[0].absence.thresholdSeconds,600);
   for(const suffix of ['','&personaId=nonexistent'])assert.equal((await fetch(origin+'/api/manage/export?key='+key+suffix,{headers})).status,400);
   const result=await fetch(origin+'/api/manage/export?key='+key+'&personaId=default',{headers});
   assert.equal(result.status,200);assert.equal(result.headers.get('content-type'),'application/zip');assert.match(result.headers.get('content-disposition'),/attachment/);

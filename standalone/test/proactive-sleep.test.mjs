@@ -7,7 +7,7 @@ import {Bridge} from '../lib/bridge.mjs';
 import {Proactive} from '../lib/proactive.mjs';
 import {defaults} from '../lib/config.mjs';
 import {initializeLife} from '../lib/lifecycle.mjs';
-import {AbsenceClock,resumeAfterMaintenance} from '../lib/absence.mjs';
+import {AbsenceClock,resumeAfterMaintenance,sleepAfterAbsence} from '../lib/absence.mjs';
 import {ConversationInbox} from '../lib/continuous-chat.mjs';
 import {WorldSimulationClock} from '../lib/world-simulation.mjs';
 import {nativePrompt} from '../lib/native-turn.mjs';
@@ -82,11 +82,11 @@ test('quiet hours and an active job block background work without changing the s
   await b.tick();assert.equal(calls.length,1);assert.equal(session.absence.phase,'asleep');
 });
 
-test('receipt completion resumes the same session once; wait -> simulate -> wait does not repeat absence',async t=>{
+test('startup receipt opens a bounded listening window; departure sleeps without periodic simulation',async t=>{
   const {b,session,advance}=fixture(t),received=session.lastHumanMessageAt;
   resumeAfterMaintenance(session,b.now(),true);
   const absence=new AbsenceClock(session,{now:b.now,config:b.config});
-  assert.equal(absence.remaining(),Infinity);assert.equal(session.lastHumanMessageAt,received);
+  assert.equal(absence.remaining(),600000);assert.equal(session.lastHumanMessageAt,received);
   const routes=[];b.handle=async r=>{routes.push(r);};
   await b.tick();await b.queues.get(session.route.key);
   assert.equal(routes.length,1);assert.equal(routes[0].loopResume,true);assert.equal(session.id,'same-session');
@@ -96,6 +96,13 @@ test('receipt completion resumes the same session once; wait -> simulate -> wait
   const clock=new WorldSimulationClock(session,{now:b.now}),box=new ConversationInbox(new AbortController().signal,()=>true,{now:b.now,absence,simulation:clock});
   advance(60000);const event=await box.take({timeoutSeconds:1},async x=>x);assert.equal(event.reason,'world-simulation');
   advance(60000);assert.equal((await box.take({timeoutSeconds:1},async x=>x)).reason,'world-simulation');
-  session.lastHumanMessageAt=b.now();assert.equal(absence.remaining(),1800000);
-  advance(1800001);assert.equal(absence.remaining(),0);
+  session.lastHumanMessageAt=b.now();assert.equal(absence.remaining(),600000);
+  advance(600001);assert.equal(absence.remaining(),0);
+  sleepAfterAbsence(session,b.now(),true);
+  assert.equal(session.absence.phase,'asleep');assert.equal(session.loopResumePending,false);
+  // Existing independently configured proactive attempts are disabled for this check.
+  b.config.recallEnabled=false;b.config.groupProactiveEnabled=false;
+  advance(3600000);await b.tick();assert.equal(routes.length,1);
+  assert.equal(absence.remaining(),0); // a scheduled wake does not reset human silence
+  session.lastHumanMessageAt=b.now();assert.equal(absence.remaining(),600000);
 });

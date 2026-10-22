@@ -1,0 +1,37 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {createHash} from 'node:crypto';
+import {ChatInbox} from '../lib/chat-inbox.mjs';
+import {monitorView,monitorMedia} from '../lib/message-monitor.mjs';
+import {createApp} from '../server.mjs';
+import {writeJson,validate} from '../lib/config.mjs';
+import {once} from 'node:events';
+const key='100000001/private/100000002';
+test('monitor paginates and searches full text without consuming unread; media fenced to indexed chat',t=>{
+ const runtime=fs.mkdtempSync(path.join(os.tmpdir(),'qq-monitor-'));t.after(()=>fs.rmSync(runtime,{recursive:true,force:true}));
+ const inbox=new ChatInbox(runtime,key);for(let i=0;i<60;i++)inbox.append({sourceId:String(i),sender:'100000002',text:'消息'+i});
+ const dir=path.join(runtime,'media',createHash('sha256').update(key).digest('hex'));fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'test.png'),'fixture');
+ inbox.append({sourceId:'media',sender:'100000002',text:'图片',snapshot:{sender:{qq:'100000002'},media:[{kind:'image',attachmentName:'test.png'}]}});
+ const before=fs.readFileSync(inbox.file,'utf8'),view=monitorView(runtime,[key],{key});assert.equal(view.messages.length,50);assert.equal(view.hasMore,true);
+ const old=monitorView(runtime,[key],{key,before:view.messages[0].seq});assert.equal(old.messages.length,11);
+ assert.equal(monitorView(runtime,[key],{key,query:'消息59'}).messages.length,1);assert.equal(fs.readFileSync(inbox.file,'utf8'),before);
+ assert.equal(monitorMedia(runtime,[key],{key,seq:61,index:0}).bytes.toString(),'fixture');
+ assert.throws(()=>monitorMedia(runtime,[],{key,seq:61,index:0}),/范围/);
+ assert.throws(()=>monitorView(runtime,[key],{key:'100000009/private/100000002'}),/当前账号/);
+ const state=inbox.read();state.messages.at(-1).snapshot.media[0].attachmentName='../secret.png';inbox.save(state);assert.throws(()=>monitorMedia(runtime,[key],{key,seq:61,index:0}),/缓存/);
+});
+test('monitor API requires login and page moves runtime monitor into logs',async t=>{
+ const runtime=fs.mkdtempSync(path.join(os.tmpdir(),'qq-monitor-http-'));t.after(()=>fs.rmSync(runtime,{recursive:true,force:true}));
+ writeJson(path.join(runtime,'config.private.json'),validate({botQQ:'100000001',privateUsers:['100000002']}));
+ const app=createApp({runtime,voice:{status:()=>({})}});app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
+ t.after(async()=>{app.bridge.stop();app.server.closeAllConnections();await new Promise(r=>app.server.close(r));});
+ const origin=new URL(app.loginUrl()).origin;assert.equal((await fetch(origin+'/api/message-monitor')).status,401);
+ const login=await fetch(app.loginUrl(),{redirect:'manual'}),headers={Cookie:login.headers.get('set-cookie').split(';')[0]};
+ new ChatInbox(runtime,key).append({sourceId:'1',sender:'100000002',text:'<script>alert(1)</script>'});
+ const result=await (await fetch(origin+'/api/message-monitor?key='+key,{headers})).json();assert.equal(result.messages[0].text,'<script>alert(1)</script>');
+ assert.equal((await fetch(origin+'/api/message-monitor?key=900000001/private/100000002',{headers})).status,400);
+ const html=await (await fetch(origin+'/',{headers})).text();assert.ok(html.indexOf('id="qq-monitor"')>html.indexOf('id="logs-tab"'));assert.ok(html.includes('id="messages-tab"'));
+});

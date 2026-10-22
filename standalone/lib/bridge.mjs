@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import {PersonaCards,personaIdentity,DEFAULT_PERSONA} from './persona-cards.mjs';
 import {ModelProfiles} from './model-profiles.mjs';
 import {PromptProfiles} from './prompt-profiles.mjs';
-import {AbsenceClock,closingAbsence,resumeAfterMaintenance} from './absence.mjs';
+import {AbsenceClock,closingAbsence,resumeAfterMaintenance,sleepAfterAbsence} from './absence.mjs';
 import {ChatHandoff} from './handoff.mjs';
 import {wakePaths,readWakeJson,writeWakeJson} from '../../native-dsh-plugin/lib/scheduled-wake.mjs';
 import path from 'node:path';
@@ -130,7 +130,7 @@ export class Bridge {
       if(!store.hasReceipt(pending.digestId))throw Error('离开整理尚未取得记忆保存回执，保留待办');
     }
     if(!current())return;
-    resumeAfterMaintenance(session,this.now(),!!config.memoryEnabled);session.blocked=false;this.persist();
+    sleepAfterAbsence(session,this.now(),!!config.memoryEnabled);session.blocked=false;this.persist();
   }
   inbox(key){return new ChatInbox(this.runtime,key,this.now);}
   chatWindow(key){const {personaId}=personaIdentity(this.runtime,key);if(this.chatWindows.get(key)?.personaId!==personaId)this.chatWindows.set(key,new ChatWindow(this.runtime,key,personaId));return this.chatWindows.get(key);}
@@ -159,7 +159,7 @@ export class Bridge {
     if(session.windowVersion!==CHAT_WINDOW_VERSION)Object.assign(session,{windowVersion:CHAT_WINDOW_VERSION,windowTurns:0,windowChars:0,windowMessages:0,windowInitial:true});
     this.persist();return session;
   }
-  enabled(route){return this.status.state==='running'&&this.status.channels?.[route.group?'group':'private']!==false&&(!route.personaId||route.personaId===personaIdentity(this.runtime,route.key).personaId);}
+  enabled(route){return this.status.state==='running'&&this.status.channels?.[route.group?'group':'private']!==false&&(!route.key||!Array.isArray(this.status.chatKeys)||this.status.chatKeys.includes(route.key))&&(!route.personaId||route.personaId===personaIdentity(this.runtime,route.key).personaId);}
   participation(key){return new Participation(this.inbox(key));}
   memory(key,requestedId){const {personaId}=personaIdentity(this.runtime,key,requestedId);if(this.memories.get(key)?.personaId!==personaId)this.memories.set(key,new MemoryStore(this.runtime,key,personaId));return this.memories.get(key);}
   configFor(route){const config=this.voiceProfiles.resolve(resolveChatConfig(this.config,route),route.key);return {...config,modelSettings:new ModelProfiles(this.runtime).view(route.key,route.personaId).effective,...new PromptProfiles(this.runtime).resolve(route.key,route.personaId),memoryContextActive:!config.memoryActiveOnly||this.state.lastActiveKey===route.key};}
@@ -168,7 +168,7 @@ export class Bridge {
   configurePersona(input){
     const {key,personaId}=input,cards=new PersonaCards(this.runtime);cards.get(key,personaId);
     const kind=key.split('/')[1];
-    if(this.status.state==='connecting'||this.status.state==='running'&&this.status.channels?.[kind]!==false)throw Error('请先停止'+(kind==='group'?'群聊':'私聊')+'接收，待任务结束后点击确定配置');
+    if(this.status.state==='connecting'||this.enabled({key,group:kind==='group'}))throw Error('请先停止'+(kind==='group'?'群聊':'私聊')+'中此聊天的接收，待任务结束后点击确定配置');
     if(this.jobs.has(key)||this.queues.has(key)||this.maintenance.has(key)||this.startup.jobs.has(key)||this.backgrounds.has(key)||this.outbox.has(key)||this.deferredDrains.has(key)||this.awaitingExit(key))throw Error('此聊天的旧任务尚未结束确认，请稍后重试；人格未切换');
     const view=cards.view(key);
     if(input.revision!==view.revision)throw Error('人格配置已变化，请刷新后重试');
@@ -340,22 +340,29 @@ export class Bridge {
   summary(config=this.config??defaults){return Object.values(this.state.sessions).filter(s=>s.route).map(s=>({key:s.route.key,personaId:s.personaId??DEFAULT_PERSONA,activePersona:this.activePersonaSession(s),sessionId:s.id,title:s.title,workspace:s.workspace,permissionPreset:s.permissionPreset??'',blocked:s.blocked,
     compactions:s.life?.compactions.length??0,pendingCompactions:s.life?.compactions.filter(c=>!s.life.digestedIds.includes(c.id)).length??0,
     lastDigest:this.memory(s.route.key,s.personaId??DEFAULT_PERSONA).state.lastDigest||null,maintenance:this.maintenance.has(s.route.key)&&this.activePersonaSession(s),lastActivity:s.life?.lastAt,
-    absence:{phase:s.absence?.phase??'active',seconds:Math.max(0,Math.floor((this.now()-(s.lastHumanMessageAt??s.lastUserAt??this.now()))/1000)),thresholdSeconds:resolveChatConfig(config,s.route).userAwaySeconds??1800},
+    absence:{phase:s.absence?.phase??'active',seconds:Math.max(0,Math.floor((this.now()-(s.lastHumanMessageAt??s.lastUserAt??this.now()))/1000)),thresholdSeconds:resolveChatConfig(config,s.route).userAwaySeconds??600},
     modelSettings:s.modelSettings??null,modelWarnings:s.modelWarnings??[]}));}
   persist() { this.state.seen = this.state.seen.slice(-10000); this.state.deliveries = this.state.deliveries.slice(-200); writeJson(this.file, this.state); }
+  chatKeys(config=this.config){return ['private','group'].flatMap(kind=>(config?.[kind==='private'?'privateUsers':'groups']??[]).map(id=>(config.botQQ||this.status.account||'')+'/'+kind+'/'+id));}
+  receivingKeys(){return Array.isArray(this.status.chatKeys)?this.status.chatKeys:this.chatKeys().filter(key=>this.status.channels?.[key.split('/')[1]]!==false);}
+  setReceivingKeys(keys){this.status.chatKeys=[...new Set(keys)];this.status.channels={private:keys.some(k=>k.includes('/private/')),group:keys.some(k=>k.includes('/group/'))};this.status.allChannels=Object.fromEntries(['private','group'].map(kind=>{const all=this.chatKeys().filter(k=>k.includes('/'+kind+'/'));return [kind,all.length>0&&all.every(k=>keys.includes(k))];}));}
   async start(config,kind='all',options={}) {
     const selected=kinds(kind);
     this.systemLog?.record('bridge.start.requested',{component:'qq'});
     if(this.status.state==='connecting')throw Error('正在连接，请稍后');
     if(this.status.state==='running')config=this.config;
+    const targets=this.chatKeys(config).filter(key=>selected.includes(key.split('/')[1])&&(!options.key||key===options.key));
+    if(options.key&&!targets.includes(options.key))throw Error('请选择允许名单内的聊天');
+    if(options.key&&options.personaId&&personaIdentity(this.runtime,options.key).personaId!==options.personaId)throw Error('人格绑定已变化，请刷新列表后启动');
     const required=[];
-    for(const kind of selected)for(const id of config[kind==='private'?'privateUsers':'groups']){
+    for(const key of targets){const [,kind,id]=key.split('/');
       const effective=resolveChatConfig(config,(config.botQQ||'00000')+'/'+kind+'/'+id);
       const preset=effective[kind==='private'?'privatePreset':'groupPreset'];
       if(!preset)throw Error('请在会话与聊天中设置'+(kind==='private'?'私聊':'群聊')+'的 DSH 预设');
       required.push({kind,preset});
     }
     const checkPresets=result=>{
+      if(options.key&&options.personaId&&personaIdentity(this.runtime,options.key).personaId!==options.personaId)throw Error('人格绑定已变化，请刷新列表后启动');
       const ids=presetIds(result);
       for(const {kind,preset} of required)if(!ids.includes(preset))throw Error((kind==='group'?'群聊':'私聊')+' DSH 预设“'+preset+'”不存在。请先在 DSH 创建该预设，或在“会话与聊天”填写实际预设 ID；这里不是群名或对话名称。');
     };
@@ -363,15 +370,16 @@ export class Bridge {
     if(this.status.state==='running'){
       const generation=this.generation,revision=this.channelRevision??0;checkPresets(await this.dsh.probe());
       if(this.status.state!=='running'||generation!==this.generation||revision!==(this.channelRevision??0))throw Error('启动已取消');
-      const newlyEnabled=selected.filter(k=>!this.status.channels[k]);
-      for(const jobs of [this.startup.jobs,this.maintenance,this.jobs,this.queues,this.outbox])if([...jobs.keys()].some(key=>newlyEnabled.includes(key.split('/')[1])))throw Error('该类型上一轮任务正在退出，请稍后启动');
-      for(const k of selected)this.status.channels[k]=true;
-      this.status.lastError='';this.startup.begin(newlyEnabled,options);this.syncReminders();return;
+      const previous=this.receivingKeys(),newKeys=targets.filter(key=>!previous.includes(key));
+      for(const jobs of [this.startup.jobs,this.maintenance,this.jobs,this.queues,this.outbox,this.backgrounds,this.deferredDrains])if([...jobs.keys()].some(key=>newKeys.includes(key)))throw Error('该聊天上一轮任务正在退出，请稍后启动');
+      if(newKeys.some(key=>this.awaitingExit(key)))throw Error('该聊天旧执行尚未结束确认');
+      this.setReceivingKeys([...previous,...targets]);
+      this.status.lastError='';this.startup.begin(selected,{...options,keys:newKeys});this.syncReminders();return;
     }
     if(this.jobs.size||this.queues.size||this.maintenance.size||this.startup.jobs.size||this.outbox.size)throw Error('上一轮任务正在退出，请稍后启动');
     this.config = structuredClone(config); this.dsh = new this.Dsh(config);
     this.dsh.systemLog=this.systemLog;
-    const generation = ++this.generation; this.status = { state: 'connecting', active: this.status.active, lastError: '',channels:{private:selected.includes('private'),group:selected.includes('group')} };
+    const generation = ++this.generation; this.status = { state: 'connecting', active: this.status.active, lastError: '' };this.setReceivingKeys(targets);
     try {
       checkPresets(await this.dsh.probe());
       if (generation !== this.generation) throw Error('启动已取消');
@@ -391,21 +399,22 @@ export class Bridge {
       const verified=await verifyQQ(socket,config);
       if(generation!==this.generation)throw Error('启动已取消');
       Object.assign(this.status,verified);
-      this.status.state = 'running';this.startup.begin(selected,options);this.syncReminders();
+      const verifiedTargets=targets.map(key=>key.startsWith('/')?verified.account+key:key);this.setReceivingKeys(verifiedTargets);
+      this.status.state = 'running';this.startup.begin(selected,{...options,keys:verifiedTargets});this.syncReminders();
       this.systemLog?.record('bridge.connected',{component:'qq'});
       this.timer=setInterval(()=>this.tick().catch(error=>{this.reportError(error.message);}),1000);this.timer.unref?.();
     } catch (error) { if (this.generation === generation) { this.stop(); this.reportError(error.message); } throw error; }
   }
-  stop(kind='all') {
-    this.startup.stop(key=>kinds(kind).includes(key.split('/')[1]));
-    this.cancelDeferred(key=>kinds(kind).includes(key.split('/')[1]));
-    const selected=kinds(kind);
+  stop(kind='all',chatKey) {
+    const selected=kinds(kind),matches=key=>chatKey?key===chatKey:selected.includes(key.split('/')[1]);
+    if(chatKey&&!this.chatKeys().includes(chatKey))throw Error('请选择允许名单内的聊天');
+    if((chatKey||kind!=='all')&&this.status.state==='connecting')throw Error('正在连接，请先停止全部');
+    this.startup.stop(matches);
+    this.cancelDeferred(matches);
     this.channelRevision=(this.channelRevision??0)+1;
     if(kind!=='all'&&this.status.state==='connecting')throw Error('正在连接，请先停止全部');
-    if(kind!=='all'&&this.status.state==='running'){
-      this.status.channels??={private:true,group:true};
-      for(const k of selected)this.status.channels[k]=false;
-      const matches=key=>selected.includes(key.split('/')[1]);
+    if((chatKey||kind!=='all')&&this.status.state==='running'){
+      this.setReceivingKeys(this.receivingKeys().filter(key=>!matches(key)));
       const keys=new Set([...this.epochs.keys(),...this.queues.keys(),...this.jobs.keys(),...this.ambient.keys(),...this.maintenance.keys(),...this.backgrounds.keys(),...this.outbox.keys(),...this.deliveryWaits.keys(),
         ...Object.values(this.state.sessions).map(s=>s.route?.key).filter(Boolean)]);
       for(const key of keys)if(matches(key)){
@@ -423,7 +432,7 @@ export class Bridge {
     for(const controllers of this.deliveryWaits.values())for(const c of controllers)c.abort();
     this.generation++; this.socket?.close(); this.dsh?.close();
     for (const resolve of this.pending.values()) resolve(null);
-    this.pending.clear(); this.status.state='stopped';this.status.channels={private:false,group:false};
+    this.pending.clear(); this.status.state='stopped';this.status.channels={private:false,group:false};this.status.chatKeys=[];this.status.allChannels={private:false,group:false};
     this.syncWakeRoutes();
   }
   receive(event, generation) {
@@ -435,6 +444,7 @@ export class Bridge {
     if(event.post_type==='notice'&&event.notice_type==='notify'&&event.sub_type==='poke'){
       const bot=String(event.self_id),group=!!event.group_id,id=String(group?event.group_id:event.user_id),key=bot+'/'+(group?'group':'private')+'/'+id;
       if(bot!==(this.status.account||this.config.botQQ)||String(event.target_id)!==bot||String(event.user_id)===bot||!(group?this.config.groups:this.config.privateUsers).includes(id))return;
+      if(!this.enabled({key,group}))return;
       const c=resolveChatConfig(this.config,key);if(!c.pokeReceive)return;
       const stamp=Number(event.time);if(!Number.isFinite(stamp)||Math.abs(this.now()-stamp*1000)>60000)return;
       const dedup='poke/'+key+'/'+event.user_id+'/'+stamp;
@@ -685,7 +695,7 @@ export class Bridge {
         prompt=promptText(config,'absence.resume')+'\n'+JSON.stringify(record?{id:record.id,at:record.at,summary:record.summary,unfinished:record.unfinished}:{handoff:null})+'\n'+prompt;
         // A bounded proactive turn may read the handoff without reopening the
         // continuous loop or resetting the user's absence state.
-        if(!route.trigger){session.absence={...session.absence,phase:'active',resumePending:true,resumedAt:this.now()};this.persist();}
+        if(!route.trigger){session.absence={...session.absence,phase:'active',resumePending:true,resumedAt:this.now()};delete session.worldSimulationPaused;this.persist();}
       }
       if(closingAbsence(session))prompt=promptText(config,'absence.handoff')+'\n'+prompt;
       if(config.dshNativeTools&&promptChanged)prompt='【提示词配置更新】以下为当前人格正在使用的最新提示词，替换此前同名规则。人设与记忆内容沿用原资料。\n'+prompt;

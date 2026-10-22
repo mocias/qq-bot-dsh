@@ -56,11 +56,11 @@ export class StartupChats{
   summary(){return Object.values(this.bridge.state.startups).map(r=>({key:r.route.key,phase:r.phase,batches:r.batches??0,completed:r.completedBatches??0,
     queued:(this.bridge.state.maintenanceInbox[r.route.key]??[]).filter(x=>x.state==='pending').length,error:r.error??''}));}
   phase(run,value){run.phase=value;this.bridge.persist();this.bridge.flow('startup.'+value,run.route);}
-  begin(kinds,{resumeCompleted=false}={}){
+  begin(kinds,{resumeCompleted=false,keys}={}){
     const b=this.bridge;
     for(const kind of kinds)for(const id of b.config[kind==='group'?'groups':'privateUsers']){
       const route={key:`${b.status.account||b.config.botQQ}/${kind}/${id}`,id,group:kind==='group'};
-      if(this.jobs.has(route.key))continue;
+      if(keys&&!keys.includes(route.key)||!b.enabled(route)||this.jobs.has(route.key))continue;
       const previous=b.state.startups[route.key];
       if(resumeCompleted&&previous?.phase==='ready'&&Number.isSafeInteger(previous.historyThroughSeq)&&previous.backend===b.config.dshUrl){
         b.drainDeferred(route.key);continue;

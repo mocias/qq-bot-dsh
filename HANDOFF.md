@@ -12,7 +12,7 @@
 
 当前验证边界：用户已自行登录成功，真实预期账号和 OneBot 在线已只读确认，QQ 接收保持停止。此前两次扫码失败属于历史记录，不能据此断言所有二维码场景已经修复。版本升级结果须另核对本机部署记录，不将源码版本当作已部署证据。
 
-更新日期：2026-10-22。当前源码与配套原生插件版本 **0.26.0-rc.5**（DSH 端口自动发现，未部署）；本机已部署的是 **0.26.0-rc.4**：发布根 `releases/0.26.0-rc.4-workspace-persona`，buildId `fbc46a8d`，服务与插件版本/构建一致，面板在 127.0.0.1:3199 运行，QQ 接收保持停止。部署前备份 `private-backups/2026-10-22-pre-rc4`（4,726 个文件、60.7 MB）；部署后逐项校验 4,726 个受保护文件，仅 `launch.private.json` 因新进程写入而改变，无缺失。原生插件在线探针 `state=ready`、`active=0`、`scheduledWakeRouter=true`、`workspaceDeletionPolicy=fresh-session`，版本与构建和服务一致。面板保存的 DSH 地址与 DSH 实际端口不一致（DSH 每次启动端口可变），rc.5 起由服务自动发现并写回；升级前仍需人工确认一次。本文件描述可发布的源码状态与本机部署状态，其他机器的安装仍须核对发布指针、服务状态及原生插件探针。
+更新日期：2026-10-22。当前源码与配套原生插件版本 **0.26.0-rc.5**，并已在本机部署：发布根 `releases/0.26.0-rc.5-dsh-discovery-r2`，buildId `ce98e8f8`，服务与插件版本/构建一致，面板在 127.0.0.1:3199 运行，QQ 接收保持停止。部署前备份 `private-backups/2026-10-22-pre-rc5`（4,726 个文件、60.7 MB）；部署后逐项校验 4,726 个受保护文件，仅 `config.private.json`（写入自动发现的新 DSH 地址）与 `launch.private.json`（新进程）变化，无缺失。原生插件在线探针 `state=ready`、`active=0`、`scheduledWakeRouter=true`、`workspaceDeletionPolicy=fresh-session`，版本与构建和服务一致。DSH 每次启动端口可变，rc.5 起服务在地址失效时自动发现并写回配置：本机实测由 `127.0.0.1:51532` 自动切到 `127.0.0.1:57469`，随后插件返回 ready。本文件描述可发布的源码状态与本机部署状态，其他机器的安装仍须核对发布指针、服务状态及原生插件探针。
 
 0.26.0-rc.1 已按用户授权本地部署，随后用户自行登录成功。0.26.0-rc.2 修复 QQ 原生登录生成 guild1.db 及其 SQLite sidecar 被严格 inventory 误判，以及面板在线状态覆盖组件完整性错误的问题；始终校验原程序摘要，禁止接管 orphan。rc.2 源码、候选包及实际部署状态分别记录；未提交推送或发布 GitHub，真实消息及媒体仍待验。详见 [修复版说明](docs/RELEASE-0.26.0-rc.2.md) 和 [集成证据](docs/NAPCAT-SHELL-INTEGRATION.md)。
 

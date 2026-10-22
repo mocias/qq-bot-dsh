@@ -1,4 +1,4 @@
-# QQ RSI 独立服务 · 0.26.0-rc.4
+# QQ RSI 独立服务 · 0.26.0-rc.5
 
 本地 NapCat Shell 集成预览版：从项目面板准备固定官方组件、启动登录和核验账号；无需手动安装 NapCat/QQ 或填写 Shell 端口与令牌，Node.js 22+ 与 DSH 要求不变。便携包根目录 open-panel.cmd 打开独立面板，使用说明见 ../LOCAL-PREVIEW.md。
 

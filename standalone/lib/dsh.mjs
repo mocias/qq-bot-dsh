@@ -2,11 +2,17 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import WebSocket from 'ws';
 import { localSessionCookie } from './local-dsh-auth.mjs';
-import {nativeCallback} from './native-callback.mjs';
+import { nativeCallback } from './native-callback.mjs';
+import { discoverDshUrl } from './dsh-discovery.mjs';
 import {VERSION,PROTOCOL,BUILD_ID} from '../../native-dsh-plugin/lib/schema.mjs';
 import {Continuations,isHostContext} from '../../native-dsh-plugin/lib/continuations.mjs';
 import {redactLog} from './diagnostic-logs.mjs';
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+
+// One listener per process: the service persists a discovered address so the
+// panel and later turns reuse it without another port scan.
+let discoveredUrlListener=null;
+export function onDiscoveredDshUrl(listener){discoveredUrlListener=listener;}
 
 export function presetIds(result){
   const rows=Array.isArray(result)?result:result?.presets;
@@ -17,8 +23,22 @@ export function presetIds(result){
 // DSH Web API protocol checked against qq-bridge a56164e7, src/dsh-client.js.
 // Launch token or explicitly enabled local browser-session grant.
 export class DshClient {
-  constructor(config) { this.config = config; this.cookie = ''; this.sockets = new Set(); this.runs = new Map(); }
+  constructor(config, { discover = discoverDshUrl } = {}) { this.config = config; this.cookie = ''; this.sockets = new Set(); this.runs = new Map(); this.urlRecoveryTried=false; this.discover=discover; }
   close() { for (const socket of this.sockets) socket.close(); this.sockets.clear(); }
+  // DSH binds a new loopback port on every launch. Recover once per client so a
+  // stale saved address cannot fail a turn or a panel probe.
+  async recoverUrl(){
+    if(this.urlRecoveryTried)return false;
+    this.urlRecoveryTried=true;
+    if(!this.config.dshLocalAuth)return false;
+    let found=null;
+    try{found=await this.discover({current:''});}catch{return false;}
+    if(!found||found.url===this.config.dshUrl)return false;
+    this.config.dshUrl=found.url;this.cookie='';this.cookieExpiresAt=0;
+    this.systemLog?.record('dsh.url.discovered',{component:'dsh',level:'warn',url:found.url});
+    try{discoveredUrlListener?.(found.url);}catch{}
+    return true;
+  }
   async authenticate() {
     if(this.config.dshLocalAuth){
       if(!this.cookie||Date.now()>(this.cookieExpiresAt??0)-300000){
@@ -45,12 +65,28 @@ export class DshClient {
     await this.authenticate();
     const args = ['agentPresets/list','permissionPresets/catalog','pluginManager/listBundles'].includes(method) ? {} : ['commands/execute','pluginManager/setBundleEnabled'].includes(method)?request:{ [method === 'session/list' ? '_request' : 'request']: request };
     let response;
+    const send=()=>fetch(new URL('/api/'+method, this.config.dshUrl), { method: 'POST', redirect: 'error',
+      headers: { 'Content-Type': 'application/json', Cookie: this.cookie },
+      body: JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } }), signal: AbortSignal.timeout(15000) });
+    const retry=async cause=>{
+      // DSH picks a new port on every launch. When the saved address stops
+      // answering, re-discover once instead of failing the whole turn.
+      if(!await this.recoverUrl())throw Error('DSH 请求失败或超时',{cause});
+      await this.authenticate();
+      try{return await send();}catch(error){throw Error('DSH 请求失败或超时',{cause:error});}
+    };
     try {
-      response = await fetch(new URL('/api/'+method, this.config.dshUrl), { method: 'POST', redirect: 'error',
-        headers: { 'Content-Type': 'application/json', Cookie: this.cookie },
-        body: JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } }), signal: AbortSignal.timeout(15000) });
-    } catch(error) { throw Error('DSH 请求失败或超时',{cause:error}); }
-    if (!response.ok) { await response.body?.cancel(); this.cookie = ''; throw Error('DSH 返回 HTTP '+response.status); }
+      response = await send();
+    } catch(error) {
+      response = await retry(error);
+    }
+    if (!response.ok) {
+      const status=response.status;
+      await response.body?.cancel(); this.cookie = '';
+      // Another service on a recycled port answers 404; that is still "not DSH here".
+      if(status===404)response=await retry(Error('DSH 返回 HTTP 404'));
+      if(!response.ok){await response.body?.cancel();this.cookie='';throw Error('DSH 返回 HTTP '+response.status);}
+    }
     const body = await response.json();
     if (body.type !== 'server-response' || body.rpcId !== rpcId)throw Error('DSH 响应格式或请求标识不匹配');
     if(!body.result?.ok){

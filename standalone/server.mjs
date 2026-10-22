@@ -6,7 +6,8 @@ import { randomBytes } from 'node:crypto';
 import { defaults, readJson, writeJson, validate, publicConfig } from './lib/config.mjs';
 import { VoiceService } from './lib/voice-service.mjs';
 import { Bridge } from './lib/bridge.mjs';
-import { DshClient } from './lib/dsh.mjs';
+import { DshClient,onDiscoveredDshUrl } from './lib/dsh.mjs';
+import { discoverDshUrl } from './lib/dsh-discovery.mjs';
 import { importedStores } from './lib/import-memory.mjs';
 import { probeQQ } from './lib/onebot.mjs';
 import { MemoryStore } from './lib/memory.mjs';
@@ -39,6 +40,14 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
   let config=validate(savedConfig?{qqBackend:'external',...savedConfig}:defaults);
   recoverMemoryReset(runtime);
   const systemLog=new SystemLog(runtime);
+  // A discovered DSH port is persisted so the panel and later turns reuse it.
+  onDiscoveredDshUrl(url=>{
+    if(!url||config.dshUrl===url)return;
+    config={...config,dshUrl:url};
+    writeJson(configFile,config);
+    if(bridge.config)bridge.config=config;
+    systemLog.record('dsh.url.persisted',{component:'dsh',url});
+  });
   const voice=injectedVoice || new VoiceService(root,runtime), bridge=injectedBridge || new Bridge(runtime,{voice});
   bridge.systemLog=systemLog;
   const desktop=new DesktopQQ(runtime),management=new Management(runtime);
@@ -362,6 +371,11 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
       } else if (url.pathname==='/api/dsh/native-status') {
         const dsh=new DshClient(config);
         try {json(res,200,await dsh.nativeStatus());} finally {dsh.close();}
+      } else if (url.pathname==='/api/dsh/discover') {
+        const found=await discoverDshUrl({current:config.dshUrl});
+        if(!found)throw Error('未找到可用的本机 DSH 服务，请确认 DSH 已启动并允许本机登录');
+        if(found.url!==config.dshUrl){config={...config,dshUrl:found.url};writeJson(configFile,config);if(bridge.config)bridge.config=config;}
+        json(res,200,{url:found.url,reused:!!found.reused,config:publicConfig(config)});return;
       } else if (url.pathname==='/api/dsh/probe') {
         const dsh=new DshClient(config);
         try { const presets=await dsh.probe(); json(res,200,{ok:true,presets}); } finally { dsh.close(); }

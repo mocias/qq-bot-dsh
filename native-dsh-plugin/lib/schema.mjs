@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import {MAX_WAIT_SECONDS} from './continuations.mjs';
 // Shared by the adapter and host. No model-provided recipient or callback address.
-export const VERSION='0.26.0-rc.4';
+export const VERSION='0.26.0-rc.5';
 export const PROTOCOL=1;
 export const BUILD_ID=(()=>{
   try{return JSON.parse(fs.readFileSync(new URL('../../release.json',import.meta.url))).buildId??'development';}

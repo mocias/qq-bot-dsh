@@ -1,6 +1,6 @@
 {
   "name": "qq-rsi-standalone",
-  "version": "0.26.0-rc.4",
+  "version": "0.26.0-rc.5",
   "private": true,
   "type": "module",
   "engines": {

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {repairWorkspaceMembership} from '../../native-dsh-plugin/lib/workspace-link.mjs';
 import {VERSION,PROTOCOL,BUILD_ID} from '../../native-dsh-plugin/lib/schema.mjs';
 
@@ -32,4 +33,30 @@ test('installed DSH registry restores existing session membership across deletio
   await r.delete(first.workspaceId);assert.equal(records.size,0);
   const restored=await repairWorkspaceMembership(ctx,root,request);assert.deepEqual(r.get(restored.workspaceId).sessionIds,['original-session']);
   assert.deepEqual(state.archivedSessionIds,['old-archived']);assert.deepEqual(state.pinnedSessionIds,['pinned-other']);assert.equal(headers[0].id,'original-session');
+});
+
+test('installed Cordis enforces the native entry service dependencies during workspace repair',{
+  skip:!process.env.QQ_RSI_DSH_SDK_ROOT
+},async t=>{
+  const base=process.env.QQ_RSI_DSH_SDK_ROOT.replace(/\/$/,'');
+  const {Context,Service}=await import(base+'/cordis/lib/index.js');
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'qq-workspace-scope-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const workspace=path.join(root,'workspaces','original');fs.mkdirSync(workspace,{recursive:true});
+  let source=fs.readFileSync(new URL('../../native-dsh-plugin/lib/index.mjs',import.meta.url),'utf8');
+  for(const name of ['dsh-tools','dsh-typert-protocol'])source=source.replace(`'@deepseek-ai/${name}'`,JSON.stringify(base+'/'+name+'/lib/index.js'));
+  const entry=path.join(root,'entry.mjs');fs.writeFileSync(entry,source);
+  const Native=(await import(pathToFileURL(entry))).default,ctx=new Context(),fibers=[];
+  for(const name of [...new Set([...Native.inject,'sessions'])]){
+    class Stub extends Service{constructor(c){super(c,name);
+      if(name==='sessions')this.get=()=>undefined;
+      if(name==='sessionPersistence')this.list=async()=>[{header:{id:'original',cwd:workspace}}];
+      if(name==='workspaceRegistry')this.create=async dir=>({id:'restored',path:dir,sessionIds:[],async attachSession(id){this.sessionIds.push(id);}});
+    }}
+    fibers.push(await ctx.plugin(Stub));
+  }
+  let operation,scope;
+  try{
+    scope=await ctx.inject(Native.inject,inner=>{operation=repairWorkspaceMembership(inner,root,{sessionId:'original',workspacePath:workspace,version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID});});
+    assert.ok(operation);assert.equal((await operation).sessionId,'original');
+  }finally{await scope?.dispose();for(const fiber of fibers.reverse())await fiber.dispose();}
 });

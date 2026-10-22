@@ -5,6 +5,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {execFileSync} from 'node:child_process';
 import {DshClient} from '../standalone/lib/dsh.mjs';
 import {readJson,writeJson} from '../standalone/lib/config.mjs';
+import {reloadNativePlugin} from './native-plugin-reload.mjs';
 const [deploymentArg,releaseArg]=process.argv.slice(2);
 if(!deploymentArg||!releaseArg)throw Error('用法：node activate-release.mjs <部署根目录> <完整发布目录>');
 const deployment=path.resolve(deploymentArg),releaseRoot=path.resolve(releaseArg);
@@ -18,6 +19,7 @@ for(const [name,hash] of Object.entries(release.hashes)){
 }
 const runtime=path.join(deployment,'standalone','.runtime'),launch=readJson(path.join(runtime,'launch.private.json'),null);
 const install=readJson(path.join(deployment,'.runtime','native-install.private.json'),null);
+let nativeWasEnabled=false;
 if(install){
   const dsh=new DshClient({...readJson(path.join(runtime,'config.private.json'),{}),dshNativeTools:false});
   try{
@@ -25,6 +27,7 @@ if(install){
     if(status.state==='disabled'){
       // A user-disabled bundle stays disabled during updates.
     }else{
+      nativeWasEnabled=status.enabled===true;
       const state=await dsh.rpc('qqRsiNative/probe');
       if(state.active)throw Error('DSH插件仍有活动回合，未切换版本');
     }
@@ -61,6 +64,14 @@ if(previous)writeJson(manifestFile+'.previous',previous);
 writeJson(manifestFile,{releaseRoot,version:release.version,protocol:release.protocol,buildId:release.buildId});
 try{
   if(install)execFileSync(process.execPath,[path.join(releaseRoot,'scripts','install-native-plugin.mjs'),deployment,install.profile,install.app],{stdio:'inherit'});
+  const updated=readJson(path.join(deployment,'.runtime','native-install.private.json'),null);
+  if(nativeWasEnabled&&install?.bootstrapHash!==updated?.bootstrapHash){
+    const dsh=new DshClient(readJson(path.join(runtime,'config.private.json'),{}));
+    try{
+      const live=await reloadNativePlugin(dsh);
+      if(live.version!==release.version||live.buildId!==release.buildId)throw Error('DSH插件入口重载后构建不一致');
+    }finally{dsh.close();}
+  }
 }catch(error){
   if(previous)writeJson(manifestFile,previous);
   throw error;

@@ -30,6 +30,14 @@ export function recoverMemoryReset(runtime){
 export function resetMemories(runtime,bridge,keys){
   if(bridge.status.state!=='stopped'||bridge.status.active||bridge.jobs.size||bridge.queues.size||bridge.maintenance.size||bridge.startup?.jobs.size)throw Error('请先停止 QQ 接收并等待全部任务结束');
   if(!keys.length||keys.some(key=>!/^\d{5,20}\/(?:private|group)\/\d{5,20}$/.test(key)))throw Error('请选择要重置的聊天');
+  const cards=new PersonaCards(runtime);
+  for(const key of keys)for(const card of cards.view(key).cards){
+    const owner=cards.owner(key,card.id),scope=personaScope(owner.key,owner.personaId);
+    for(const other of Object.keys(cards.read().chats))for(const c of cards.view(other).cards){
+      const o=cards.owner(other,c.id);if(personaScope(o.key,o.personaId)===scope&&!keys.includes(other))throw Error('该人格记忆被其他聊天共用，请使用全账号重置或保留共享资料');
+    }
+    if(!keys.includes(owner.key))throw Error('共享人格的来源聊天未包含在重置范围内');
+  }
   const id=randomUUID(),base='memory-reset-backups/'+id,selected=new Set(keys),before=structuredClone(bridge.state),moves=[];
   for(const key of keys)for(const card of new PersonaCards(runtime).view(key).cards)for(const scope of [personaScope(key,card.id)])for(const relative of ['memories/'+scope,'knowledge/'+scope+'.json','chat-inbox/'+scope+'.json','chat-context/'+scope]){
     const source=location(runtime,relative);if(fs.existsSync(source))moves.push({source:relative,backup:base+'/'+relative});

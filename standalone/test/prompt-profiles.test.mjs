@@ -8,6 +8,7 @@ import {PromptProfiles} from '../lib/prompt-profiles.mjs';
 import {PersonaCards} from '../lib/persona-cards.mjs';
 import {promptText,promptTool} from '../../native-dsh-plugin/lib/prompt-text.mjs';
 import {DEFINITIONS} from '../../native-dsh-plugin/lib/schema.mjs';
+import {PROMPT_CATALOG} from '../../native-dsh-plugin/lib/prompt-catalog.mjs';
 import {nativePrompt} from '../lib/native-turn.mjs';
 import {worldSimulationPrompt,WorldSimulationClock} from '../lib/world-simulation.mjs';
 import {ConversationInbox} from '../lib/continuous-chat.mjs';
@@ -55,9 +56,35 @@ test('effective sections reach normal input, timed simulation, wait returns and 
   const inbox=new ConversationInbox(new AbortController().signal,()=>true,{config});inbox.push(route);
   assert.equal((await inbox.take({},async r=>r)).instruction,'[wait choice]');
   const def=DEFINITIONS.find(d=>d.name==='qq_send_message'),overridden=promptTool(def,config);
-  assert.equal(overridden.description,'[send description]');assert.deepEqual(overridden.parameters,def.parameters);
+  assert.equal(overridden.description,'[send description]');
+  const structural=p=>Object.fromEntries(Object.entries(p).map(([k,{description,...s}])=>[k,s]));
+  assert.deepEqual(structural(overridden.parameters),structural(def.parameters));
   const wait=promptTool(DEFINITIONS.find(d=>d.name==='qq_wait_for_messages'),config);
   assert.equal(wait.parameters.timeoutSeconds.description,'[seconds]');assert.equal(wait.parameters.timeoutSeconds.type,'number');
+});
+
+test('scene defaults, scene edits and persona overrides stay isolated through native input and restart',t=>{
+  const root=temp(t),p=new PromptProfiles(root),privateKey='100000001/private/100000002';
+  const priv=p.resolve(privateKey),group=p.resolve(key);
+  assert.match(promptText(priv,'chat.style'),/【私聊】/);
+  assert.doesNotMatch(promptText(priv,'chat.style'),/【群聊不是客服队列】/);
+  assert.match(promptText(group,'chat.style'),/【群聊不是客服队列】/);
+  assert.notEqual(priv.promptProfileRevision,group.promptProfileRevision);
+  p.save({kind:'private',revision:0,overrides:{'chat.style':'私聊覆盖','simulation.body':'私聊推演'}});
+  assert.equal(promptText(p.resolve(privateKey),'chat.style'),'私聊覆盖');
+  assert.notEqual(promptText(p.resolve(key),'chat.style'),'私聊覆盖');
+  p.save({key:privateKey,personaId:'default',revision:1,overrides:{'chat.style':'人格覆盖'}});
+  assert.equal(p.view(privateKey).inherited['chat.style'],'私聊覆盖');
+  assert.equal(promptText(new PromptProfiles(root).resolve(privateKey),'chat.style'),'人格覆盖');
+  assert.match(worldSimulationPrompt(Date.now(),null,p.resolve(privateKey)),/私聊推演/);
+  assert.throws(()=>p.save({key,kind:'private',personaId:'default',revision:2,overrides:{}}),/不一致/);
+  assert.throws(()=>p.view(undefined,undefined,'invalid'),/类型无效/);
+  for(const [route,cfg,expected,excluded] of [[{key:privateKey,group:false},p.resolve(privateKey),'人格覆盖','群聊不是客服队列'],[{key,group:true},p.resolve(key),'群聊不是客服队列','私聊覆盖']]){
+    const result=nativePrompt(null,{...route,messages:[]},cfg,{bootstrap:true,persona:'测试人格'});
+    assert.ok(result.includes(expected));assert.ok(!result.includes(excluded));
+  }
+  const tools=promptTool(DEFINITIONS.find(x=>x.name==='qq_reply'),JSON.parse(JSON.stringify(p.resolve(privateKey))));
+  assert.match(tools.description,/省略replyToMessageId/);
 });
 
 test('new workspace names include mode and explicit persona name; collisions and old paths remain isolated',t=>{
@@ -86,7 +113,7 @@ test('prompt page API is authenticated, isolated, revision-checked and blocks ac
   const post=(url,body)=>fetch(origin+url,{method:'POST',headers,body:JSON.stringify(body)});
   assert.equal((await post('/api/config',{botQQ:'100000001',groups:['100000002']})).status,200);
   let r=await fetch(origin+'/api/prompts',{headers}),data=await r.json();
-  assert.equal(data.catalog.length,98);assert.equal(data.targets.length,1);assert.equal(fs.existsSync(path.join(root,'memories')),false);
+  assert.equal(data.catalog.length,PROMPT_CATALOG.length);assert.ok(data.catalog.some(entry=>entry.id==='tool.qq_send_message.faceId'));assert.equal(data.targets.length,1);assert.equal(fs.existsSync(path.join(root,'memories')),false);
   assert.equal((await fetch(origin+'/prompt-editor.js',{headers})).status,200);
   const html=await(await fetch(origin+'/',{headers})).text();assert.match(html,/id="prompts-tab"/);assert.match(html,/id="prompt-full"/);
   assert.equal((await post('/api/prompts',{revision:0,overrides:{'chat.style':'[owner override]'}})).status,200);
@@ -101,4 +128,13 @@ test('prompt page API is authenticated, isolated, revision-checked and blocks ac
   assert.equal(promptText(app.bridge.configFor({key,group:true}),'chat.style'),'[persona override]');
   assert.equal((await post('/api/persona-cards/rename',{key,personaId:'default',revision:0,name:'知遥'})).status,200);
   assert.equal(new PersonaCards(root).get(key).name,'知遥');
+  const privateView=await(await fetch(origin+'/api/prompts?kind=private',{headers})).json();
+  assert.equal(privateView.scope,'scene');assert.equal(privateView.kind,'private');
+  assert.ok(!privateView.catalog.some(e=>e.id==='chat.input.8'||e.id.startsWith('tool.qq_group_')));
+  assert.equal((await post('/api/prompts',{kind:'private',revision:2,overrides:{'chat.style':'private-default'}})).status,200);
+  assert.equal((await post('/api/prompts',{kind:'bad',revision:3,overrides:{}})).status,400);
+  assert.notEqual(promptText(app.bridge.configFor({key,group:true}),'chat.style'),'private-default');
+  app.bridge.status.state='running';app.bridge.status.channels={group:false,private:true};
+  assert.equal((await post('/api/prompts',{kind:'private',revision:3,overrides:{}})).status,400);
+  app.bridge.status.state='stopped';app.bridge.status.channels={group:false,private:false};
 });

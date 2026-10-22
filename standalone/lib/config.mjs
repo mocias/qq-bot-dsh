@@ -10,7 +10,7 @@ export const defaults = {
   bubbleMinSeconds:2,bubbleMaxSeconds:5,
   chatPolicy: {private:{},group:{},overrides:{}},
   dshUrl: 'http://127.0.0.1:3080', dshToken: '', dshLocalAuth: false, dshNativeTools:false,
-  qqUrl: 'ws://127.0.0.1:3001', qqToken: '', botQQ: '',
+  qqBackend: 'shell', qqUrl: 'ws://127.0.0.1:3001', qqToken: '', botQQ: '',
   adminUsers: [], qqFiles: false, groupAmbientEnabled: false, groupAmbientDelaySeconds: 10, groupAmbientMinSeconds: 300, groupToolsEnabled: false, knowledgeEnabled: false, remindersEnabled: false,
   privateUsers: [], groups: [], privatePreset: '', groupPreset: '', permissionPreset:'',
   voice: 'Microsoft Huihui Desktop', model: 'small',
@@ -78,6 +78,7 @@ export function validate(input, previous = defaults) {
   if (input.clearDshToken === true) out.dshToken = '';
   if (input.clearQqToken === true) out.qqToken = '';
   if (input.clearMimoApiKey === true) out.mimoApiKey = '';
+  if(!['shell','external'].includes(out.qqBackend))throw Error('QQ 接入方式无效');
   if(!['auto','never','always'].includes(out.quoteMode))throw Error('引用模式无效');
   if(!['off','participants','admins','private-peer-group-admins'].includes(out.personaPolicy))throw Error('自动人设权限选项无效');
   if(out.bubbleMaxSeconds<out.bubbleMinSeconds)throw Error('气泡最长间隔不能小于最短间隔');

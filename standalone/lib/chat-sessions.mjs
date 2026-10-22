@@ -17,7 +17,7 @@ export class ChatSessions {
 
   record(id,route,workspace,preset,config) {
     const personaId=route.personaId??DEFAULT_PERSONA;
-    const session={id,personaId,transport:transportFor(config),blocked:false,
+    const session={id,personaId,modelSettings:structuredClone(config.modelSettings??{}),transport:transportFor(config),blocked:false,
       route:{key:route.key,id:route.id,group:route.group,personaId},
       workspace,preset,backend:config.dshUrl,namingPending:true,
       permissionPreset:config.permissionPreset??'',permissionPending:!!config.permissionPreset};

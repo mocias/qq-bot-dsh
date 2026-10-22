@@ -2,7 +2,11 @@
 
 开发入口：[当前逻辑地图](docs/ARCHITECTURE.md) · [结构整理与后续优先级](docs/REFACTOR-2026-10.md)。
 
-当前发布版本 **0.25.3**：删除工作区后新建工作区及会话，新名称包含所选人设卡名称；保留配置、记忆及旧会话历史。继承 0.25.2 的记忆格式修复。见 [修复说明](docs/RELEASE-0.25.3.md)。
+当前源码版本 **0.26.0-rc.3**，为本地 NapCat Shell 集成预览版，尚未发布 GitHub。项目从固定官方来源自动准备并校验组件，不需要手动安装 NapCat/QQ 或填写其端口与令牌；Node.js 22+ 和 DSH 仍需另行安装。此前扫码失败后，用户现已自行登录成功，只读确认账号与 OneBot 在线。本版在 rc.2 的组件完整性修复之上，增加按“全局→私聊/群聊→人格”覆盖的模型与上下文窗口配置、同一账号内复用他人人格卡（共享人设与记忆），并修复双击入口在 PowerShell 5.1 下的编码错误；真实消息与媒体仍未验收。见 [0.26.0-rc.3 说明](docs/RELEASE-0.26.0-rc.3.md)、[模型与上下文窗口](docs/MODEL-PROFILES.md)、[共享人格](docs/SHARED-PERSONA.md)。
+
+0.26.0-rc.2 修复登录生成数据库被误判为组件篡改，以及面板仅因在线便显示就绪的问题。见 [rc.2 说明](docs/RELEASE-0.26.0-rc.2.md)。
+
+继续保留 0.25.3 行为：删除工作区后新建工作区及会话，新名称包含所选人设卡名称；保留配置、记忆及旧会话历史。继承 0.25.2 的记忆格式修复。见 [修复说明](docs/RELEASE-0.25.3.md)。
 
 0.25.0 统一会话生命周期、记忆查询和发送计划准备，修复轮换/手动新建的原生会话被再次替换的问题，并更新 Web 面板、导航、表单与手机布局。见 [0.25.0 发布说明](docs/RELEASE-0.25.0.md)。
 
@@ -24,24 +28,26 @@
 - **离开、交接、原会话恢复**：默认 30 分钟没有真人来信就停止普通等待，由 `qq_handoff` 保存交接，再在同一 DSH 会话整合记忆，取得回执后休眠。机器人发言、模拟和预约不会重置来信计时。用户回来时仍在原会话恢复人设、交接和记忆，不发送上线招呼。
 - **定时醒来并主动发消息**：启用对应聊天的 DSH 定时唤醒权限后，预约由 QQ 服务先恢复原生工具再提交模型；每次预约独立去重。DSH 与 QQ 服务必须运行，手动停止接收优先；此功能不能启动已关闭的应用或电脑。
 - **同一聊天多个人格**：人格卡先预览、点击确定配置才切换；每个人格独立保存人设、长期记忆、语音和会话。支持全局提示词继承及人格单独覆盖，旧默认人格保留原资料。
+- **人格跨聊天复用**：同一机器人账号下可把另一个聊天的人格卡加入当前聊天，共用人设、长期记忆、角色状态和音色；消息窗口、未读、发送目标、模型与提示词仍各自独立。引用不复制原资料，双方修改双向生效。见[共享人格](docs/SHARED-PERSONA.md)。
+- **模型与上下文窗口**：按“全局默认→私聊/群聊默认→具体聊天人格”覆盖，保存后只影响后续新建会话；上下文窗口同时作用于请求元数据与压缩阈值。不支持的模型或窗口会降级为 DSH 默认并在系统日志告警，不会让对话静默失败。见[模型配置](docs/MODEL-PROFILES.md)。
 - **完整记忆与语音**：按需读页、搜索、来源校验和维护回执继续保留；记忆导出仅包含选中聊天及人格的资料。语音工具将朗读正文与 `voiceStyle` 情绪、语速和停顿说明分开；MiMo 接收逐条说明，本地 Windows 语音不具备相同情绪控制。
 
 保留二代逐条消息快照、引用与语音拆分、明确沉默处理，以及“实际发送内容只经一个出口”的规则。安装包不带账号、密钥、聊天记录、记忆或录音。隔离测试不代表真实模型的语义判断质量或真实QQ联调已通过；验证范围见[验证记录](docs/VALIDATION.md)。
 
 ## 下载与安装
 
-从本仓库的 [Releases](https://github.com/mocias/qq-bot-dsh/releases) 下载 `qq-bot-dsh-0.25.3-windows-portable.zip`。这是 Windows 便携安装包，包含服务、轻量插件、启动/更新脚本及服务的 Node 依赖；不是包含全部环境的 EXE。Node.js 22+、DSH 桌面版及 QQ/NapCat 需要另行安装。压缩包不包含任何账号、密钥、聊天记录、私人记忆或语音模型。
+本地预览包名为 `qq-bot-dsh-0.26.0-rc.3-windows-portable.zip`，解压后运行根目录 `open-panel.cmd`，按 `LOCAL-PREVIEW.md` 操作。本版未上传 [GitHub Releases](https://github.com/mocias/qq-bot-dsh/releases)。以下正式部署命令仅供后续手动安装/切换时使用，打包不会自动执行。这是 Windows 便携安装包，包含服务、轻量插件、启动/更新脚本及服务的 Node 依赖；不是包含全部环境的 EXE。Node.js 22+ 与 DSH 桌面版需要另行安装。QQ/NapCat 二进制不随发行包提供；Shell 接入可在面板点击准备后从固定官方来源下载并校验包含 Node、QQ native runtime 的 NapCat 包，使用外部接入则需配置已有的 OneBot 服务。压缩包不包含任何账号、密钥、聊天记录、私人记忆或语音模型。
 
-先将压缩包解压到一个新的版本目录，例如 `C:\QQRSI\releases\0.25.3`，进入该目录执行：
+先将压缩包解压到一个新的版本目录，例如 `C:\QQRSI\releases\0.26.0-rc.3`，进入该目录执行：
 
 ```powershell
 # 选择部署根目录与当前版本，统一启用原生模式
-node scripts/activate-release.mjs "C:\QQRSI" "C:\QQRSI\releases\0.25.3"
+node scripts/activate-release.mjs "C:\QQRSI" "C:\QQRSI\releases\0.26.0-rc.3"
 
 # 首次安装时登记轻量插件；后两个路径须替换为实际 DSH profile 和安装目录
 node scripts/install-native-plugin.mjs "C:\QQRSI" "<DSH profile目录>" "<DSH安装目录>"
 
-# 启动并打开已登录面板
+# 启动服务并打开本机配置面板
 & .\standalone\scripts\open-panel.ps1 -Runtime "C:\QQRSI\standalone\.runtime" -StartScript "C:\QQRSI\start-latest.ps1"
 ```
 
@@ -61,7 +67,7 @@ npm run test:standalone
 npm run start:standalone
 ```
 
-打开终端打印的本机登录链接。默认端口为 `3199`，QQ 连接默认停止。在面板填写另行启动的 DSH 与 OneBot 服务地址、机器人账号和允许名单，验证后手动连接。账号、令牌和聊天资料只保存在本机 `standalone/.runtime/`。
+打开终端打印的本机登录链接。默认端口为 `3199`，QQ 接收默认停止。选择项目管理的 Shell 接入后，面板按步骤准备官方组件、启动登录并核对账号；外部接入则填写已有的 DSH 与 OneBot 服务地址。配置机器人账号和允许名单后，仍需手动开启接收。账号、令牌和聊天资料只保存在本机 `standalone/.runtime/`。
 
 ## 目录
 
@@ -87,10 +93,10 @@ node scripts/package-release.mjs "<不存在的新发布目录>"
 
 ## 新机器需要单独配置
 
-DSH、QQ/NapCat、Python 环境、语音模型、API 密钥、私人记忆均不在仓库中。语音模型和部署目录的准备方式见 [开发说明](docs/DEVELOPMENT.md)。桌面 QQ 与机器人共用一个登录实例的方式见 [迁移说明](docs/MIGRATION.md)。
+DSH、QQ/NapCat、Python 环境、语音模型、API 密钥、私人记忆均不随仓库分发。生成的便携目录含 `external-components.json`，逐项标明外部依赖、自动准备策略和校验要求；清单不表示 NapCat/QQ 已在某台机器下载、启动或登录。Shell 准备与四组能力验收见 [NapCat Shell 集成计划](docs/NAPCAT-SHELL-INTEGRATION.md)。语音模型和部署目录的准备方式见 [开发说明](docs/DEVELOPMENT.md)。桌面 QQ 与机器人共用一个登录实例的方式见 [迁移说明](docs/MIGRATION.md)。
 
 交接从 [HANDOFF.md](HANDOFF.md) 开始，开发约定见 [AGENTS.md](AGENTS.md)，验证范围见 [docs/VALIDATION.md](docs/VALIDATION.md)。
 
 ## 来源与许可
 
-保留各来源模块的独立许可，详见 `dsh-onebot-source/LICENSE`、`dsh-plugin-memory-source/LICENSE` 和 [第三方说明](standalone/THIRD-PARTY-NOTICES.md)。本仓库没有把不同来源代码重新统一授权。QQ 协议接入参考 [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge)，NapCat 与 DSH 需另行安装。
+保留各来源模块的独立许可，详见 `dsh-onebot-source/LICENSE`、`dsh-plugin-memory-source/LICENSE` 和 [第三方说明](standalone/THIRD-PARTY-NOTICES.md)。本仓库没有把不同来源代码重新统一授权。QQ 协议接入参考 [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge)。NapCat/QQ 不嵌入项目发布包；Shell 模式按用户触发从固定官方来源准备组件，DSH 仍需另行安装。

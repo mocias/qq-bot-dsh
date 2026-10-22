@@ -3,6 +3,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {snapshotOf,inboxSnapshot} from './message-snapshot.mjs';
 import {maintain} from './lifecycle.mjs';
+import {resumeAfterMaintenance} from './absence.mjs';
 
 const sourceId=m=>m.sourceId??m.messageId;
 const input=m=>({...((m.sourceId&&typeof m.sender==='object')?m:snapshotOf({messageId:sourceId(m),sender:m.sender,text:m.text,qqMessageId:m.qqMessageId})),messageId:sourceId(m)});
@@ -13,7 +14,8 @@ export function startupSources(store,inbox,sessions=[]){
   if(fs.existsSync(dir))for(const name of fs.readdirSync(dir)){
     const file=path.join(dir,name);if(!name.endsWith('.json'))continue;
     if(!fs.lstatSync(file).isFile())throw Error('原始记忆记录必须是普通文件');
-    records.push(JSON.parse(fs.readFileSync(file,'utf8')));
+    const record=JSON.parse(fs.readFileSync(file,'utf8'));
+    if((record.chatKey??store.memoryKey??store.key)===store.key)records.push(record);
   }
   const covered=new Set(),turns=new Set(),compressions=new Set();
   for(const r of records)if(r.kind==='digest-source'&&store.hasReceipt(r.id)){
@@ -102,7 +104,7 @@ export class StartupChats{
     }
     check();
     if(config.dshNativeTools){session=await b.prepareChatWindow({...route,inboxSeq:run.historyThroughSeq+1},session,current);check();run.sessionId=session.id;b.persist();}
-    session.worldSimulationInputAt=b.now();delete session.worldSimulationPaused;
+    resumeAfterMaintenance(session,b.now(),true);
     this.phase(run,'ready');
   }
 }

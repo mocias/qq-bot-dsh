@@ -2,8 +2,9 @@ import {promptText} from '../../native-dsh-plugin/lib/prompt-text.mjs';
 import {VERSION} from '../../native-dsh-plugin/lib/schema.mjs';
 import fs from 'node:fs';
 import {PersonaCards,personaIdentity,DEFAULT_PERSONA} from './persona-cards.mjs';
+import {ModelProfiles} from './model-profiles.mjs';
 import {PromptProfiles} from './prompt-profiles.mjs';
-import {AbsenceClock,closingAbsence} from './absence.mjs';
+import {AbsenceClock,closingAbsence,resumeAfterMaintenance} from './absence.mjs';
 import {ChatHandoff} from './handoff.mjs';
 import {wakePaths,readWakeJson,writeWakeJson} from '../../native-dsh-plugin/lib/scheduled-wake.mjs';
 import path from 'node:path';
@@ -16,6 +17,7 @@ import {ChatSessions} from './chat-sessions.mjs';
 import {ensureWorkspaceDirectory} from './workspace.mjs';
 import { initializeLife, noteArrival, observeCompaction, maintain, due } from './lifecycle.mjs';
 import { verifyQQ } from './onebot.mjs';
+import { probePacketBackend } from './packet-status.mjs';
 import { Media } from './media.mjs';
 import { VoiceService } from './voice-service.mjs';
 import { Proactive,groupRateAllowed } from './proactive.mjs';
@@ -128,7 +130,7 @@ export class Bridge {
       if(!store.hasReceipt(pending.digestId))throw Error('离开整理尚未取得记忆保存回执，保留待办');
     }
     if(!current())return;
-    session.absence={...pending,phase:'asleep',sleptAt:this.now(),memorySaved:!!config.memoryEnabled};session.blocked=false;this.persist();
+    resumeAfterMaintenance(session,this.now(),!!config.memoryEnabled);session.blocked=false;this.persist();
   }
   inbox(key){return new ChatInbox(this.runtime,key,this.now);}
   chatWindow(key){const {personaId}=personaIdentity(this.runtime,key);if(this.chatWindows.get(key)?.personaId!==personaId)this.chatWindows.set(key,new ChatWindow(this.runtime,key,personaId));return this.chatWindows.get(key);}
@@ -160,7 +162,7 @@ export class Bridge {
   enabled(route){return this.status.state==='running'&&this.status.channels?.[route.group?'group':'private']!==false&&(!route.personaId||route.personaId===personaIdentity(this.runtime,route.key).personaId);}
   participation(key){return new Participation(this.inbox(key));}
   memory(key,requestedId){const {personaId}=personaIdentity(this.runtime,key,requestedId);if(this.memories.get(key)?.personaId!==personaId)this.memories.set(key,new MemoryStore(this.runtime,key,personaId));return this.memories.get(key);}
-  configFor(route){const config=this.voiceProfiles.resolve(resolveChatConfig(this.config,route),route.key);return {...config,...new PromptProfiles(this.runtime).resolve(route.key,route.personaId),memoryContextActive:!config.memoryActiveOnly||this.state.lastActiveKey===route.key};}
+  configFor(route){const config=this.voiceProfiles.resolve(resolveChatConfig(this.config,route),route.key);return {...config,modelSettings:new ModelProfiles(this.runtime).view(route.key,route.personaId).effective,...new PromptProfiles(this.runtime).resolve(route.key,route.personaId),memoryContextActive:!config.memoryActiveOnly||this.state.lastActiveKey===route.key};}
   scope(route){const config=this.configFor(route),preset=route.group?config.groupPreset:config.privatePreset,{personaId}=personaIdentity(this.runtime,route.key);return createHash('sha256').update(config.dshUrl+'|'+preset+'|'+route.key+(this.state.memoryEpochs?.[route.key]?'|'+this.state.memoryEpochs[route.key]:'')+(personaId===DEFAULT_PERSONA?'':'|persona:'+personaId)).digest('hex');}
   activePersonaSession(session){return !!session.route&&(session.personaId??DEFAULT_PERSONA)===personaIdentity(this.runtime,session.route.key).personaId;}
   configurePersona(input){
@@ -338,7 +340,8 @@ export class Bridge {
   summary(config=this.config??defaults){return Object.values(this.state.sessions).filter(s=>s.route).map(s=>({key:s.route.key,personaId:s.personaId??DEFAULT_PERSONA,activePersona:this.activePersonaSession(s),sessionId:s.id,title:s.title,workspace:s.workspace,permissionPreset:s.permissionPreset??'',blocked:s.blocked,
     compactions:s.life?.compactions.length??0,pendingCompactions:s.life?.compactions.filter(c=>!s.life.digestedIds.includes(c.id)).length??0,
     lastDigest:this.memory(s.route.key,s.personaId??DEFAULT_PERSONA).state.lastDigest||null,maintenance:this.maintenance.has(s.route.key)&&this.activePersonaSession(s),lastActivity:s.life?.lastAt,
-    absence:{phase:s.absence?.phase??'active',seconds:Math.max(0,Math.floor((this.now()-(s.lastHumanMessageAt??s.lastUserAt??this.now()))/1000)),thresholdSeconds:resolveChatConfig(config,s.route).userAwaySeconds??1800}}));}
+    absence:{phase:s.absence?.phase??'active',seconds:Math.max(0,Math.floor((this.now()-(s.lastHumanMessageAt??s.lastUserAt??this.now()))/1000)),thresholdSeconds:resolveChatConfig(config,s.route).userAwaySeconds??1800},
+    modelSettings:s.modelSettings??null,modelWarnings:s.modelWarnings??[]}));}
   persist() { this.state.seen = this.state.seen.slice(-10000); this.state.deliveries = this.state.deliveries.slice(-200); writeJson(this.file, this.state); }
   async start(config,kind='all',options={}) {
     const selected=kinds(kind);
@@ -673,13 +676,16 @@ export class Bridge {
       const bootstrap=session.promptVersion!==promptVersion||returning;
       const promptChanged=session.promptProfileRevision!==config.promptProfileRevision;
       route.modelInputAt=this.now();
-      if(route.worldSimulation&&!closingAbsence(session))route.roleSimulation=this.roleState(session)?.begin();
+      if(route.worldSimulation&&!route.loopResume&&!closingAbsence(session))route.roleSimulation=this.roleState(session)?.begin();
+      if(!route.trigger)delete session.loopResumePending;
       let prompt = config.dshNativeTools?nativePrompt(store,route,config,{bootstrap,persona,knowledge,delegationPolicyUpdate:promptChanged||session.delegationPolicyVersion!==DELEGATION_POLICY_VERSION,conversationPolicyUpdate:promptChanged||session.conversationPolicyVersion!==CONTINUOUS_POLICY_VERSION}):preparePrompt(store,route,config,route.evidenceIds??[],{bootstrap});
       if(returning){
         const handoff=new ChatHandoff({store,session,route,config});
         const record=handoff.state.latest?handoff.load(handoff.state.latest):null;
         prompt=promptText(config,'absence.resume')+'\n'+JSON.stringify(record?{id:record.id,at:record.at,summary:record.summary,unfinished:record.unfinished}:{handoff:null})+'\n'+prompt;
-        session.absence={...session.absence,phase:'active',resumePending:true,resumedAt:this.now()};this.persist();
+        // A bounded proactive turn may read the handoff without reopening the
+        // continuous loop or resetting the user's absence state.
+        if(!route.trigger){session.absence={...session.absence,phase:'active',resumePending:true,resumedAt:this.now()};this.persist();}
       }
       if(closingAbsence(session))prompt=promptText(config,'absence.handoff')+'\n'+prompt;
       if(config.dshNativeTools&&promptChanged)prompt='【提示词配置更新】以下为当前人格正在使用的最新提示词，替换此前同名规则。人设与记忆内容沿用原资料。\n'+prompt;
@@ -700,6 +706,7 @@ export class Bridge {
       }
       job.prepareMedia=part=>this.media.outgoing(part,{...route,qqMessageId:job.inputs.at(-1)?.qqMessageId},session,config);
       const nativeTools=config.dshNativeTools?nativeTurn({config,route,session,store,tools,messaging,job,persist:()=>this.persist(),
+        onModelWarning:warnings=>this.systemLog?.record('model.settings.fallback',{level:'warn',component:'qq',warnings}),
         isCurrent:()=>!controller.signal.aborted&&generation===this.generation&&this.enabled(route)&&
           (route.epoch===undefined||route.epoch===(this.epochs.get(route.key)??0))}):undefined;
       let response,parsed,images=route.images;const replies=[];
@@ -907,6 +914,10 @@ export class Bridge {
       }
       if(plan.action.endsWith('_poke')){
         if(!config.pokeSend)throw Error('此聊天未启用拍一拍发送');
+        if(config.qqBackend==='shell'){
+          const packet=await probePacketBackend((action,params)=>this.call(action,params),{now:this.now});
+          if(packet.state!=='ready')throw Error(`NapCat PacketBackend 未就绪；拍一拍不可用（${packet.state}）`);
+        }
         const key='send/'+route.key,last=this.state.pokeTimes[key];
         if(last!==undefined&&this.now()-last<30000)throw Error('拍一拍冷却中');
         this.state.pokeTimes[key]=this.now();
@@ -1017,8 +1028,14 @@ export class Bridge {
         if(!route||!this.enabled(route)||generation!==this.generation||session.blocked||this.startup.blocked(route.key)||this.hasDeferred(route.key)||this.status.active>=20||this.ambient.has(route.key)||this.queues.has(route.key)||this.jobs.has(route.key)||this.maintenance.has(route.key)||this.scope(route)!==scope)continue;
         if(!(route.group?this.config.groups:this.config.privateUsers).includes(route.id))continue;
         const version=session.life.version,config=this.configFor(route),epoch=this.epochs.get(route.key)??0;
-        if(['asleep','digest'].includes(session.absence?.phase))continue;
-        if(config.dshNativeTools&&!session.worldSimulationPaused&&this.state.startups[route.key]?.phase==='ready'){
+        if(closingAbsence(session))continue;
+        if(config.dshNativeTools&&session.loopResumePending){
+          session.loopResumePending=false;this.persist();this.status.active++;
+          this.enqueue({...route,worldSimulation:true,loopResume:true,messageId:'loop-resume-'+randomUUID(),messages:[],epoch},generation)
+            .catch(error=>this.reportError(error.message)).finally(()=>{this.status.active=Math.max(0,this.status.active-1);});
+          continue;
+        }
+        if(session.absence?.phase!=='asleep'&&config.dshNativeTools&&!session.worldSimulationPaused&&this.state.startups[route.key]?.phase==='ready'){
           const clock=this.simulationClock(session);
           if(session.worldSimulationInputAt===undefined)clock.delivered();
           else if(clock.remaining()===0){
@@ -1072,7 +1089,10 @@ export class Bridge {
       this.systemLog?.record('maintenance.started',{component:'memory'});
       const operation=maintain({session,config,store,dsh:this.maintenanceDsh(session),persist:()=>this.persist(),now:this.now,isCurrent:current,signal:controller.signal,
         rotate:(receipt,version)=>this.rotate(scope,session,receipt,version,generation,controller.signal)})
-        .then(()=>this.systemLog?.record(controller.signal.aborted?'maintenance.cancelled':'maintenance.completed',{component:'memory'}))
+        .then(()=>{
+          if(current()&&!controller.signal.aborted&&this.state.sessions[scope]===session&&session.life.receipt&&session.life.digestVersion===session.life.version){resumeAfterMaintenance(session,this.now(),true);this.persist();}
+          this.systemLog?.record(controller.signal.aborted?'maintenance.cancelled':'maintenance.completed',{component:'memory'});
+        })
         .catch(error=>{session.life.retryAt=this.now()+config.memoryIdleSeconds*1000;this.persist();this.reportError(error.message);this.systemLog?.record('maintenance.failed',{component:'memory',level:'error'});})
         .finally(()=>{if(this.maintenance.get(route.key)===job)this.maintenance.delete(route.key);if(this.queues.get(route.key)===operation)this.queues.delete(route.key);this.drainDeferred(route.key,generation);});
       this.queues.set(route.key,operation);operations.push(operation);

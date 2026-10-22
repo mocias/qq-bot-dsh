@@ -191,11 +191,13 @@ export class DshClient {
           runId,version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID,allowed:options.nativeTools.allowed,continuous,
           ...(options.nativeTools.handoff?{handoff:true,handoffPending:!!options.nativeTools.handoffPending,awayRequested:!!options.nativeTools.awayRequested}:{}),
           ...(options.nativeTools.promptRules?{promptRules:options.nativeTools.promptRules}:{}),
+          modelSettings:options.nativeTools.modelSettings,
           ...(options.nativeTools.memoryContext?{memoryContext:options.nativeTools.memoryContext()}:{}),callback:{url:callback.url,token:callback.token}}:request,id);
         if(native&&result?.accepted===false&&result.error?.code==='QQ_SUBMIT_REJECTED'){
           throw Object.assign(Error('DSH 提交被拒绝：'+redactLog(result.error.message??'未知原因',[this.cookie,this.config.dshToken,callback.token]).slice(0,1500)),{notSubmitted:acceptedRequests===0});
         }
         acceptedRequests++;
+        if(native&&Array.isArray(result?.warnings)&&result.warnings.length)options.nativeTools?.onModelWarning?.(result.warnings);
         if(result?.command)throw Error('桥接内容不应触发 DSH 命令');
         if(native&&!heartbeat&&!closing){
           heartbeat=setInterval(async()=>{

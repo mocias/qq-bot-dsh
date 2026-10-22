@@ -1,6 +1,16 @@
 # QQ 独立服务交接
 
-更新日期：2026-10-22。当前源码与配套原生插件版本 **0.25.3**。本文件描述可发布的源码状态，不代表某台机器已经部署；实际安装须核对发布指针、服务状态及原生插件探针。
+2026-10-22 模型配置与共享人格（源码，未部署）：新增“模型与上下文窗口”，按全局→私聊/群聊→人格覆盖，保存只影响后续新会话，窗口同时进入请求元数据与压缩阈值；模型不可用或窗口超容量时降级为 DSH 默认并写 `model.settings.fallback` 告警，不再中断 QQ 回合。新增同账号内复用他人人格卡：人设、长期记忆、角色状态和音色共用，消息窗口、未读、发送目标、模型和提示词仍按聊天隔离；单聊天重置在共享时被拒绝。修复双击入口 PowerShell 5.1 编码（补 BOM 并加解析回归）与人设页切换聊天后模型卡片范围不同步。说明见 [模型配置](docs/MODEL-PROFILES.md)、[共享人格](docs/SHARED-PERSONA.md)、[rc.3](docs/RELEASE-0.26.0-rc.3.md)。
+
+2026-10-22 后续循环契约：记忆整理成功后恢复同一会话的等待/模拟循环，使用 handledHumanMessageAt 防止同一次离开重复整理，loopResumePending 经过现有聊天队列恢复。旧版休眠会话仍可执行受限后台主动尝试，不复活持续循环；下次完成启动整理后应用新契约。每日主动次数0明确标为关闭，不能解释为无限额度。反AI味规则补齐主体性、避免推销总结和连发补货，按人格选择装傻/反问/拒绝。只做隔离模拟和本机部署状态检查，不调用真实模型。
+
+2026-10-22 场景提示词与配置导航更新（源码，未部署）：会话与聊天、提示词配置、人设与记忆共用类型/对象/人格选择，全部类型可选全部人格并自动定位；实际人格切换仍需确定配置。提示词增加私聊/群聊默认和人格继承，私聊不再使用群聊风格，工具说明与后续回调采用同一有效文本快照。说明见 docs/PROMPT-PROFILES-0.23.md。独立回归447项中439通过、0失败、8项安装版SDK条件跳过；便携三组及原记忆自检通过。隔离浏览器检查类型筛选、跨页人格、草稿恢复和场景保存，无控制台错误；未调用真实模型或QQ，未修改实际主动额度和休眠调度。
+
+当前验证边界：用户已自行登录成功，真实预期账号和 OneBot 在线已只读确认，QQ 接收保持停止。此前两次扫码失败属于历史记录，不能据此断言所有二维码场景已经修复。版本升级结果须另核对本机部署记录，不将源码版本当作已部署证据。
+
+更新日期：2026-10-22。当前源码与配套原生插件版本 **0.26.0-rc.3**，并已在本机部署：发布根 `releases/0.26.0-rc.3-model-persona`，buildId `ce684059ef74`，服务与插件版本/构建一致，面板在 127.0.0.1:3199 运行，QQ 接收保持停止。部署前备份 `private-backups/2026-10-22-pre-rc3`（4,726 个文件、60.7 MB）；部署后逐项校验 4,726 个受保护文件，仅 `launch.private.json` 因新进程写入而改变，无缺失。部署时 DSH 桌面版未运行，原生插件的登记（link 依赖、bundle 已启用、bootstrapHash 未变）已写入，但 `scheduledWakeRouter` 实时探针需在 DSH 启动后另测。本文件描述可发布的源码状态与本机部署状态，其他机器的安装仍须核对发布指针、服务状态及原生插件探针。
+
+0.26.0-rc.1 已按用户授权本地部署，随后用户自行登录成功。0.26.0-rc.2 修复 QQ 原生登录生成 guild1.db 及其 SQLite sidecar 被严格 inventory 误判，以及面板在线状态覆盖组件完整性错误的问题；始终校验原程序摘要，禁止接管 orphan。rc.2 源码、候选包及实际部署状态分别记录；未提交推送或发布 GitHub，真实消息及媒体仍待验。详见 [修复版说明](docs/RELEASE-0.26.0-rc.2.md) 和 [集成证据](docs/NAPCAT-SHELL-INTEGRATION.md)。
 
 0.25.3 按用户最新要求取代自动恢复策略：删除受管目录或 DSH 登记后，新建不同路径及新会话；新名称包含所选人格卡名称，保留旧历史与独立记忆。只读检查不重新创建或关联旧工作区。见 [修复说明](docs/RELEASE-0.25.3.md)。
 
@@ -52,7 +62,8 @@
 | `standalone/lib/world-simulation.mjs`、`role-state.mjs` | 60秒推演触发、状态及角色经历保存 |
 | `standalone/lib/absence.mjs`、`handoff.mjs`、`startup-chat.mjs` | 真人空闲计时、交接及原会话整合/恢复 |
 | `native-dsh-plugin/lib/scheduled-wake.mjs`、`runtime.mjs` | DSH预约拦截、工具挂载、稳定入口兼容 |
-| `standalone/lib/persona-cards.mjs`、`prompt-profiles.mjs`、`export-memory.mjs` | 人格隔离、规则继承和ZIP导出 |
+| `standalone/lib/persona-cards.mjs`、`prompt-profiles.mjs`、`export-memory.mjs` | 人格隔离、人格复用（共享记忆引用）、规则继承和ZIP导出 |
+| `standalone/lib/model-profiles.mjs`、`native-dsh-plugin/lib/model-settings.mjs` | 模型与上下文窗口的三层覆盖、新会话快照、每 Agent 窗口绑定与降级告警 |
 | `native-dsh-plugin/lib/prompt-catalog.mjs`、`prompt-text.mjs` | 可编辑规则与工具说明 |
 | `standalone/server.mjs`、`public/prompt-editor.js` | 面板/API、鉴权及提示词编辑 |
 | `standalone/lib/memory.mjs`、`legacy-memory/` | 记忆适配及保留来源许可的原记忆核心 |
@@ -64,13 +75,15 @@
 
 本版已使用临时虚构资料覆盖离开→交接→同会话记忆回执→休眠→同会话恢复、预约恢复QQ工具→一次模拟发送、预约重投去重、停止及人格隔离、导出鉴权和语音请求。安装版DSH SDK实际定时器投递通过；隔离浏览器完成ZIP下载和时长保存，Windows标准ZIP读取通过。
 
-真实模型长时间自主行为、真实QQ发送及MiMo音频情绪效果不在这些隔离验证范围内。测试不应为了补齐验收而启用真实接收或发送。
+NapCat Shell 集成另见 [四组能力、准备流水线和验收边界](docs/NAPCAT-SHELL-INTEGRATION.md)。发行包写出 `external-components.json` 并将其摘要纳入 `release.json`；NapCat、QQ、Node 和 DSH 仍为外部组件。Shell 可由面板从固定官方来源自动准备组件，但第三方二进制不随本项目发行包提供；缺来源及校验清单时必须阻断，不能把用户手动放文件描述为自动准备完成。UI 指定的唯一执行器已真实启动固定 4.18.41 包并展示登录二维码，组件完整性和本机管理接口已核验；此前两次扫码失败后用户已自行登录成功，账号与 OneBot 在线只读核验通过；未发送真实消息。
+
+真实模型长时间自主行为、真实QQ发送及MiMo音频情绪效果不在这些隔离验证范围内。本轮真实验收范围仅包括一个已授权机器人账号和一个私聊对象，禁止群聊；接收及双向消息验收仍待主智能体后续指令。其他测试使用临时资料与 OneBot fixture。
 
 ## 发布步骤
 
 1. 审核源码及待提交文件，排除运行目录、配置、密钥、记忆、媒体和私人备份；确认服务与插件版本一致。
 2. 完成上述检查并更新README、本交接、AGENTS及相关版本文档，提交源码。保留各来源LICENSE/NOTICE。
-3. 使用 `node scripts/package-release.mjs <不存在的新目录>` 生成便携目录，校验 `release.json` 所有哈希。源码包从对应提交生成，不带依赖；便携包包含服务依赖，但不包括Node、DSH、QQ/NapCat和语音模型。
+3. 使用 `node scripts/package-release.mjs <不存在的新目录>` 生成便携目录，校验 `release.json` 所有哈希及 `external-components.json` 清单。源码包从对应提交生成，不带依赖；便携包包含服务依赖，但不包括Node、DSH、QQ/NapCat和语音模型。
 4. 发布版本标签、源码ZIP、Windows便携ZIP及 `SHA256SUMS.txt`，核对远端提交、标签和下载资产摘要。按README安装命令在新目录统一激活，不单独替换插件。
 5. 实际部署另行检查发布指针、服务/插件版本与构建、预约路由探针、接收停止状态和私人数据保留情况。GitHub上传本身不等同本机部署。
 

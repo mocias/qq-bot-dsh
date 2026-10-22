@@ -20,7 +20,7 @@ export function zipFiles(entries){
 }
 export function exportMemory(runtime,key,personaId){
   if(!personaId)throw Error('请明确选择要导出的人格');
-  const identity=personaIdentity(runtime,key,personaId),root=path.join(runtime,'memories',identity.scope),entries=[];let total=0;
+  const identity=personaIdentity(runtime,key,personaId),root=path.join(runtime,'memories',identity.memoryScope),entries=[];let total=0;
   for(const dir of [path.join(runtime,'memories'),root,path.join(root,'.runtime')])if(fs.existsSync(dir)&&fs.lstatSync(dir).isSymbolicLink())throw Error('不能导出符号链接目录');
   const add=(name,bytes)=>{total+=bytes.length;if(total>64*1024*1024||entries.length>=16000)throw Error('导出内容超过64MiB或16000个文件，请分批备份');entries.push([name,bytes]);};
   function walk(dir,relative=''){

@@ -1,4 +1,4 @@
-param([string]$Deployment=(Split-Path $PSScriptRoot -Parent))
+﻿param([string]$Deployment=(Split-Path $PSScriptRoot -Parent))
 $ErrorActionPreference='Stop'
 $taskDeployment=(Resolve-Path -LiteralPath $Deployment).Path
 $taskManifest=Get-Content -LiteralPath (Join-Path $taskDeployment '.runtime/native-release.private.json') -Raw | ConvertFrom-Json

@@ -27,6 +27,10 @@ media/
 /dsh-qq-deploy/*
 !/dsh-qq-deploy/README.md
 
+# Test fixtures left behind when a Windows rename is blocked
+/.tmp-qq-shell-test-*/
+/.tmp-*/
+
 # Build outputs and local verification reports
 /work/
 /artifacts/

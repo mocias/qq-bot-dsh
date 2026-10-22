@@ -48,7 +48,7 @@ export class VoiceProfiles {
   }
   resolve(config,key){
     // Read only: resolving a voice must not create a memory library when disabled.
-    const {scope}=personaIdentity(this.runtime,key),dir=path.join(this.runtime,'memories',scope);
+    const {memoryScope}=personaIdentity(this.runtime,key),dir=path.join(this.runtime,'memories',memoryScope);
     const file=path.join(dir,'.runtime','persona-voice.json');
     for(const target of [dir,path.dirname(file),file])if(fs.existsSync(target)&&fs.lstatSync(target).isSymbolicLink())throw Error('人设语音配置路径无效');
     const saved=readJson(file,null);

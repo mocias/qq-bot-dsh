@@ -62,22 +62,24 @@ export class QQControl{
       const call=await this.admin(config);result.napcatReady=true;
       const status=await call('/QQLogin/CheckLoginStatus'),info=await call('/QQLogin/GetQQLoginInfo');
       result.phase=String(status?.loginPhase??'unknown');result.account=String(info?.uin??'');
-      result.online=status?.isLogin===true;result.accountMatches=result.account===config.botQQ;
-      result.message=result.online?(result.accountMatches?'QQ 已登录，账号与面板一致':'QQ 已登录其他账号，请在桌面 QQ 切换为面板指定账号'):'等待在桌面 QQ 登录或扫描登录二维码';
+      result.online=status?.isLogin===true;result.accountMatches=!!config.botQQ&&result.account===config.botQQ;
+      result.message=result.online?(result.accountMatches?'QQ 已登录，账号与面板一致':config.qqBackend==='shell'?'当前 QQ 账号不符，接收保持关闭；请停止 QQ 登录进程后重新登录预期账号':'QQ 已登录其他账号，请在桌面 QQ 切换为面板指定账号'):'等待 QQ 登录或扫描登录二维码';
     }catch(error){result.message=error.message;}
-    try{const data=await this.connect(config);result.interfaceOnline=true;result.account=data.account;result.online=true;result.accountMatches=true;result.message='QQ 接口在线，登录账号与面板一致';}
+    try{const data=await this.connect(config);result.interfaceOnline=true;result.account=data.account;result.online=true;result.accountMatches=!!config.botQQ&&data.account===config.botQQ;result.message=result.accountMatches?'QQ 接口在线，登录账号与面板一致':'请先保存预期机器人账号并核验登录身份';}
     catch{result.interfaceOnline=false;}
     return result;
   }
   async qrcode(config){
+    if(!/^\d{5,20}$/.test(config.botQQ))throw Error('请先保存机器人 QQ 账号，再显示登录二维码');
     const call=await this.admin(config),state=await call('/QQLogin/CheckLoginStatus');
     if(state?.isLogin||state?.qrLoginAccepted)throw Error('QQ 已登录或正在完成登录，请刷新状态；不会替换现有登录');
     const data=await call('/QQLogin/GetQQLoginQrcode');
-    if(typeof data?.qrcode!=='string'||!data.qrcode||data.qrcode.length>4096)throw Error('登录二维码尚未生成，请稍后重试或使用桌面 QQ');
+    if(typeof data?.qrcode!=='string'||!data.qrcode||data.qrcode.length>4096)throw Error('登录二维码尚未生成，请稍后重试');
     return {image:await this.qr(data.qrcode,{width:256,margin:2}),message:'请用面板指定账号扫码；扫码不改变面板账号，也不会自动启动回复。'};
   }
   async contacts(config,kind){
     if(!['private','group'].includes(kind))throw Error('请选择好友或群');
+    if(!/^\d{5,20}$/.test(config.botQQ))throw Error('请先保存机器人 QQ 账号，再读取列表');
     const data=await this.connect(config,kind==='private'?'get_friend_list':'get_group_list');
     if(!Array.isArray(data.items))throw Error('QQ 未返回有效列表');
     return {account:data.account,kind,items:data.items.slice(0,1000).map(x=>({id:String(kind==='private'?x.user_id:x.group_id),name:String(kind==='private'?(x.remark||x.nickname||''):x.group_name||'').slice(0,100)})).filter(x=>/^\d{5,20}$/.test(x.id))};

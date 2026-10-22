@@ -9,7 +9,7 @@ import {once} from 'node:events';
 function fixture(t){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'napcat-sync-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const dir=path.join(root,'framework');fs.mkdirSync(path.join(dir,'config'),{recursive:true});fs.writeFileSync(path.join(dir,'nativeLoader.cjs'),'fixture');
-  return {root,dir,config:{botQQ:'100000001',qqUrl:'ws://127.0.0.1:3001',qqToken:'test-only-token',napcatFrameworkDir:dir}};
+  return {root,dir,config:{qqBackend:'external',botQQ:'100000001',qqUrl:'ws://127.0.0.1:3001',qqToken:'test-only-token',napcatFrameworkDir:dir}};
 }
 test('panel connection replaces managed listener while retaining unrelated NapCat settings',()=>{
   const original={parseMultMsg:true,network:{httpServers:[{name:'other'}],websocketServers:[{name:'qq-rsi-local',port:1234},{name:'external',port:9999}]}};
@@ -55,7 +55,7 @@ test('wrong logged-in account and web auth failure never update another active a
   assert.equal(failure.state,'pending');assert.ok(!JSON.stringify(failure).includes('secret'));
 });
 test('panel save syncs the selected account and sync endpoint requires authentication and idle bridge',async t=>{
-  const {root,dir,config}=fixture(t),app=createApp({runtime:root,voice:{status:()=>({})}});
+  const {root,dir,config}=fixture(t),app=createApp({runtime:root,voice:{status:()=>({})},qqRuntime:{status:async()=>({process:{state:'stopped'}})}});
   app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
   t.after(async()=>{app.bridge.stop();app.server.closeAllConnections();await new Promise(r=>app.server.close(r));});
   const login=await fetch(app.loginUrl(),{redirect:'manual'}),origin=new URL(app.loginUrl()).origin;

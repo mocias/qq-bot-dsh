@@ -75,7 +75,7 @@ export async function maintain({session,config,store,dsh,persist,now,isCurrent,s
       if(!args||typeof args!=='object'||Array.isArray(args)||++toolCount>queryLimit)throw Error('整理查询参数无效或次数超限');
       return runMemoryQuery(store,name,args,{background:true});
     };
-    const nativeTools=config.dshNativeTools?{allowed,execute:async(name,args)=>{
+    const nativeTools=config.dshNativeTools?{modelSettings:session.modelSettings??config.modelSettings,allowed,execute:async(name,args)=>{
       if(!allowed.includes(name)||signal.aborted||life.version!==version||!isCurrent())throw Error('整理回合已失效');
       if(nativeDigest)throw Error('本轮整理结果已提交');
       if(name!=='qq_memory_digest')return {result:executeRead(name,args)};

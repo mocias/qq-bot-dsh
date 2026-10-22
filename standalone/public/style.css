@@ -22,6 +22,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 button { cursor: pointer; }
 button:disabled { opacity: .44; cursor: not-allowed; }
 [hidden] { display: none !important; }
+#chat-context { margin-bottom: 20px; }
 ::selection { color: #174b3e; background: #ccecdf; }
 :focus-visible { outline: 3px solid #8fc9b7; outline-offset: 3px; }
 .skip-link { position: fixed; left: 20px; top: -80px; z-index: 50; padding: 12px 18px; background: var(--ink); color: white; border-radius: 8px; }

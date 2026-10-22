@@ -1,3 +1,4 @@
+import {bindModelSettings} from './model-settings.mjs';
 import {promptText,validatePromptRules,promptTool} from './prompt-text.mjs';
 import {VERSION,PROTOCOL,BUILD_ID,DEFINITIONS,names} from './schema.mjs';
 import {randomUUID} from 'node:crypto';
@@ -74,6 +75,9 @@ export class NativeRuntime{
       this.bindings.set(sessionId,binding);
       this.renew(binding);
       try{
+        const modelBinding=await bindModelSettings(agent,this.ctx.agentPresets?.serviceFor(agent,'compaction'),request.modelSettings,this.ctx.sessionController?.agents);
+        binding.disposers.push(modelBinding.dispose);
+        if(modelBinding.warnings.length)binding.modelWarnings=modelBinding.warnings;
         if(handoff){
           let serial=0;
           binding.control=async(action,args)=>{
@@ -239,7 +243,7 @@ export class NativeRuntime{
       const message={id:requestId,role:'user',source:{kind:'plugin:qq-rsi-native',runId,rpcId:requestId},content:admitted};
       onDispatch();dispatchStarted=true;agent[mode==='steer'?'steer':'followup'](message);
     }catch(error){if(dispatchStarted)this.invalidate(binding);else this.drop(binding);throw error;}
-    return {accepted:true,requestId,source:'plugin:qq-rsi-native'};
+    return {accepted:true,requestId,source:'plugin:qq-rsi-native',...(binding.modelWarnings?{warnings:binding.modelWarnings}:{})};
   }
   release(request){
     // Reuse the existing remote entry so an already-loaded stable loader can

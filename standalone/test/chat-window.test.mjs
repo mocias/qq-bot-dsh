@@ -60,13 +60,13 @@ test('continuous admission limit retains every unexposed input for next window',
   assert.equal(result.messages.length,2);assert.equal(inbox.pending.length,2);
   const closed=await inbox.take({timeoutSeconds:1},()=>assert.fail());assert.equal(closed.reason,'window-full');assert.equal(inbox.pending.length,2);
 });
-test('new windows include full persona and exact upstream anti-AI marker once; incremental input stays concise',()=>{
-  const route={key,compactView:{messages:[{id:'M1',speaker:'U1',text:'来'}]}};
+test('new windows include full persona and project group rules; incremental input stays concise',()=>{
+  const route={key,group:true,compactView:{messages:[{id:'M1',speaker:'U1',text:'来'}]}};
   const initial=nativePrompt(null,route,{}, {bootstrap:true,persona:'完整人设\n嘴欠但不乱认人'});
-  assert.ok(initial.includes(ANTI_AI));assert.match(initial,/完整人设/);
-  const next=nativePrompt(null,route,{}, {bootstrap:false,persona:'完整人设'});assert.ok(next.includes(ANTI_AI));assert.doesNotMatch(next,/完整人设|sourceId|inboxSeq/);
+  assert.match(initial,/群聊不是客服队列/);assert.match(initial,/完整人设/);
+  const next=nativePrompt(null,route,{}, {bootstrap:false,persona:'完整人设'});assert.match(next,/当前是群聊/);assert.doesNotMatch(next,/完整人设|sourceId|inboxSeq/);
   const upgrade=nativePrompt(null,route,{}, {bootstrap:false,conversationPolicyUpdate:true});
-  assert.match(upgrade,/群聊不是客服队列/);assert.match(upgrade,/反 AI 味：拒绝有求必应/);assert.match(upgrade,/首答前/);assert.match(upgrade,/回复后/);
+  assert.match(upgrade,/群聊不是客服队列/);assert.match(upgrade,/保持主体性/);assert.match(upgrade,/首答前/);assert.match(upgrade,/回复后/);
 });
 test('maintenance keeps the chat session, and uncertain cancellation confirms that same session',async t=>{
   const {root}=fixture(t),b=new Bridge(root);b.config={...defaults,botQQ:'100000001',groups:['100000002']};b.status={state:'running',channels:{group:true}};

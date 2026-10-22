@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 const bool=(label,section,kinds)=>({type:'boolean',label,section,kinds});
 const number=(label,section,min,max)=>({type:'number',label,section,min,max});
 export const policyFields={
-  userAwaySeconds:{...number('用户离开判定时长（秒）','会话与记忆',1,604800),help:'默认1800秒（30分钟）。只按最后一条用户消息计时，群聊按任何群成员来信；模拟、机器人发言及定时唤醒不重置。到期保存交接并整理记忆后休眠，新消息或定时任务在原会话恢复。'},
+  userAwaySeconds:{...number('用户离开判定时长（秒）','会话与记忆',1,604800),help:'默认1800秒（30分钟）。只按最后一条真人消息计时；到期交接并整理记忆，成功后原会话恢复等待与模拟循环。同一次离开不重复整理，新来信后重新计时；模拟、机器人发言及预约不重置。'},
   messageToolsEnabled:{...bool('消息查询与未读管理工具','消息功能'),help:'仅查询本机接入后保留的本聊天最近500条消息；允许群的未提及消息也进入索引，但不会因此自动回复。关闭后仍保留原生聊天的基本发送与等待能力。'},
   quoteMode:{type:'select',label:'引用回复',section:'消息功能',options:{auto:'按需引用',never:'不发送引用',always:'普通回复默认引用当前消息'}},
   mentionSend:bool('允许群内 @ 指定成员','消息功能',['group']),
@@ -46,13 +46,13 @@ export const policyFields={
   voiceQuietStart:number('自动语音安静时段开始（小时）','消息功能',0,23),
   voiceQuietEnd:number('自动语音安静时段结束（小时）','消息功能',0,23),
   stickerLearn:bool('记录表情并学习含义','表情与黑话'),
-  stickerSend:bool('允许助手选择已存表情发送','表情与黑话'),
+  stickerSend:{...bool('允许助手发送 QQ 表情','表情与黑话'),help:'开启后允许通过 qq_send_message 发送固定版本支持的 QQ 系统表情，或通过 qq_send_sticker 选择已存表情；关闭时两种表情发送都不可用。'},
   stickerCollect:{...bool('允许面板将此聊天的表情收藏到 QQ','表情与黑话'),help:'仅允许手动点击“收藏到 QQ”；通过已连接的 QQ 接口，收藏到当前机器人账号的 QQ 表情库。不会自动收藏全部图片，也不会发送消息。'},
   slangLearn:bool('学习群聊黑话（只提交待审核候选）','表情与黑话',['group']),
   proactiveEnabled:{...bool('定时主动搭话','定时搭话与追忆'),help:'按时间检查：私聊从长期记忆中追忆；群聊读取近期聊天寻找话题。不需要刚收到消息，也可以选择不发言。'},
   proactiveMinSeconds:number('主动搭话最短间隔（秒）','定时搭话与追忆',1,604800),
   proactiveMaxSeconds:number('主动搭话最长间隔（秒）','定时搭话与追忆',1,604800),
-  proactiveMaxPerDay:number('每日最多主动尝试次数','定时搭话与追忆',0,100),
+  proactiveMaxPerDay:{...number('每日最多主动尝试次数（0 关闭）','定时搭话与追忆',0,100),help:'0 表示关闭定时搭话，不是不限量。按主动尝试计数，模型选择沉默或失败也占一次；休眠后仍按间隔和额度检查，停止接收后不检查。'},
   proactiveMaxPerSession:number('每个会话最多主动尝试次数（0 不限）','定时搭话与追忆',0,100),
   proactiveStart:{type:'time',label:'主动消息开始时间（北京时间）',section:'定时搭话与追忆'},
   proactiveEnd:{type:'time',label:'主动消息结束时间（北京时间）',section:'定时搭话与追忆'},

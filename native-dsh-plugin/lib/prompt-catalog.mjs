@@ -1,5 +1,6 @@
 // Editable QQ prompt defaults. Persona and memory-specific rules remain in their own modules.
 export const PROMPT_CATALOG = [
+  {id:'loop.resume',title:'记忆整理后进入持续循环',group:'等待与模拟',text:'记忆整理阶段已完成，恢复本会话的持续循环。先调用qq_wait_for_messages等待消息；若先返回交接记录，读取恢复状态后继续等待。收到新消息时处理消息；定时模拟到期时推演并保存状态，按人设决定是否有自然动作，再继续等待。不要发送上线招呼或整理报告。相同一段真人离开已经处理，不要重复交接整理；有新来信后离开计时才重新生效。',source:'本项目会话生命周期',when:'启动或后台记忆整理成功后'},
   {
     "id": "chat.style",
     "title": "完整聊天风格与分条节奏",
@@ -404,7 +405,7 @@ export const PROMPT_CATALOG = [
     "id": "tool.qq_send_message",
     "title": "工具说明 · qq_send_message",
     "group": "工具说明",
-    "text": "向当前聊天发送文字气泡，每次最多8条，返回逐条实际回执。发送不结束对话，可继续处理或等待；不要重复发送已成功或结果未知的消息。",
+    "text": "向当前聊天发送文字气泡，每次最多8条，返回逐条实际回执。可在单条消息中附加固定版本支持的QQ系统表情ID，也可只发该表情。发送不结束对话，可继续处理或等待；不要重复发送已成功或结果未知的消息。",
     "source": "native schema",
     "when": "工具对当前聊天开放时；仅修改说明，不修改参数和权限"
   },
@@ -421,6 +422,14 @@ export const PROMPT_CATALOG = [
     "title": "参数说明 · qq_send_message / atUserId",
     "group": "工具参数",
     "text": "可选当前群成员代号U或QQ",
+    "source": "native schema",
+    "when": "对应工具的参数说明；参数名称和格式固定"
+  },
+  {
+    "id": "tool.qq_send_message.faceId",
+    "title": "参数说明 · qq_send_message / faceId",
+    "group": "工具参数",
+    "text": "可选整数：固定 NapCat v4.18.41 face_config.json 中支持的 QQ 系统表情 QSid；仅适用于一条消息，可与文字、引用和@共存；须开启当前聊天的表情发送策略",
     "source": "native schema",
     "when": "对应工具的参数说明；参数名称和格式固定"
   },

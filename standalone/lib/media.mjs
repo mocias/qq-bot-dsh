@@ -11,6 +11,7 @@ import { sniffImageMediaType } from '../../dsh-group-social/lib/images.mjs';
 import { inProtectedDir } from '../../dsh-group-social/lib/security.mjs';
 import { textReason, wavInfo, defaults as voiceDefaults } from '../../dsh-companion-voice/lib/core.mjs';
 import {parseCqString,faceToEmoji} from '../../dsh-onebot-source/lib/cq.js';
+import {normalizeQQFaceId} from './qq-face.mjs';
 
 const MAX=8*1024*1024;
 const opaqueFile=value=>typeof value==='string'&&value.length>0&&value.length<=512&&!/[\\/:]/.test(value)&&value!=='.'&&value!=='..';
@@ -195,11 +196,14 @@ export class Media {
   }
   async outgoing(parsed,route,session,config){
     const q=parsed.qq??{};
-    if(!q||typeof q!=='object'||Array.isArray(q)||Object.keys(q).some(k=>!['images','voice','voiceStyle','forward','file','video','replyTo','at'].includes(k)))throw Error('QQ 输出格式无效');
+    if(!q||typeof q!=='object'||Array.isArray(q)||Object.keys(q).some(k=>!['images','voice','voiceStyle','forward','file','video','replyTo','at','faceId'].includes(k)))throw Error('QQ 输出格式无效');
+    const faceId=q.faceId===undefined?undefined:normalizeQQFaceId(q.faceId);
+    if(faceId!==undefined&&!(config.stickerSend??config.knowledgeEnabled))throw Error('此聊天未开启表情发送');
     if(q.voiceStyle!==undefined&&(typeof q.voice!=='string'||typeof q.voiceStyle!=='string'||q.voiceStyle.length>300))throw Error('语音情绪说明无效');
     if(('images'in q&&!Array.isArray(q.images))||('forward'in q&&!Array.isArray(q.forward))||('voice'in q&&typeof q.voice!=='string'))throw Error('QQ 输出格式无效');
     const kinds=[Array.isArray(q.images)&&q.images.length>0,typeof q.voice==='string'&&!!q.voice,Array.isArray(q.forward)&&q.forward.length>0,!!q.file,!!q.video].filter(Boolean).length;
     if(kinds>1)throw Error('一次回复只能选择一种多媒体形式');
+    if(faceId!==undefined&&(q.images?.length||q.voice||q.forward?.length||q.file||q.video))throw Error('QQ 系统表情只能附加到文字消息');
     if(q.file||q.video){
       if(!(config.qqFileSend??config.qqFiles))throw Error('文件收发未启用');
       const source=q.file??q.video;if(typeof source!=='string')throw Error('附件路径无效');
@@ -245,6 +249,7 @@ export class Media {
         segments.push({type:'image',data:{file:'base64://'+bytes.toString('base64')}});
       }
     }
+    if(faceId!==undefined)segments.push({type:'face',data:{id:String(faceId)}});
     if(!segments.some(x=>x.type==='record')&&reply.trim()&&reply.trim()!=='[[QQ_SILENT]]'){
       const chars=Array.from(reply),text=[];
       for(let offset=0;offset<chars.length;offset+=4000)text.push({type:'text',data:{text:chars.slice(offset,offset+4000).join('')}});

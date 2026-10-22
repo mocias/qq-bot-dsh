@@ -20,32 +20,37 @@ import { DesktopQQ } from './lib/desktop-qq.mjs';
 import {policyView,policyRevision,resolveChatConfig} from './lib/chat-policy.mjs';
 import {syncNapcat} from './lib/napcat-sync.mjs';
 import {QQControl} from './lib/qq-control.mjs';
+import {NapcatShellRuntime} from './lib/qq-runtime/index.mjs';
 import {SystemLog} from './lib/system-log.mjs';
 import {DiagnosticLogs,redactLog} from './lib/diagnostic-logs.mjs';
 import {wakeSeconds} from './lib/timing.mjs';
 import {recoverMemoryReset,resetMemories} from './lib/reset-memory.mjs';
 import {VoiceProfiles} from './lib/voice-profiles.mjs';
+import {ModelProfiles} from './lib/model-profiles.mjs';
 import {PersonaCards,personaIdentity} from './lib/persona-cards.mjs';
 import {PromptProfiles} from './lib/prompt-profiles.mjs';
 import {exportMemory} from './lib/export-memory.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-export function createApp({ root = path.dirname(here), runtime = path.join(here,'.runtime'), voice: injectedVoice, bridge: injectedBridge, qqControl: injectedControl, diagnosticOptions } = {}) {
+export function createApp({ root = path.dirname(here), runtime = path.join(here,'.runtime'), voice: injectedVoice, bridge: injectedBridge, qqControl: injectedControl, qqRuntime: injectedRuntime, diagnosticOptions, validationMessage='' } = {}) {
   const configFile=path.join(runtime,'config.private.json');
-  let config=validate(readJson(configFile, defaults));
+  const savedConfig=readJson(configFile,null);
+  // Existing installations keep their external desktop/OneBot connection until explicitly migrated.
+  let config=validate(savedConfig?{qqBackend:'external',...savedConfig}:defaults);
   recoverMemoryReset(runtime);
   const systemLog=new SystemLog(runtime);
   const voice=injectedVoice || new VoiceService(root,runtime), bridge=injectedBridge || new Bridge(runtime,{voice});
   bridge.systemLog=systemLog;
   const desktop=new DesktopQQ(runtime),management=new Management(runtime);
   const qqControl=injectedControl||new QQControl();
+  const qqRuntime=injectedRuntime||new NapcatShellRuntime({runtimeRoot:runtime});
   const diagnosticLogs=new DiagnosticLogs(runtime,qqControl,diagnosticOptions);
   const voiceProfiles=new VoiceProfiles(runtime);
-  const personaCards=new PersonaCards(runtime);
+  const personaCards=new PersonaCards(runtime),modelProfiles=new ModelProfiles(runtime);
   const promptProfiles=new PromptProfiles(runtime);
-  function promptPayload(key,personaId){
+  function promptPayload(key,personaId,kind){
     if(key)checkKey(key,false,personaId);
-    return {...promptProfiles.view(key,personaId),targets:keys().map(key=>({key,...personaCards.view(key)})),
+    return {...promptProfiles.view(key,personaId,kind),targets:keys().map(key=>({key,...personaCards.view(key)})),
       components:[
         {name:'DSH系统与预设',location:'由DSH管理，包含基础模型指令、已授权工具、审批和工作区上下文。'},
         {name:'QQ提示词',location:'本页编辑：聊天风格、回复范围、持续等待、模拟、主动搭话、委派、交接、发送纠正及非记忆工具说明。'},
@@ -56,23 +61,47 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
   function profilePayload(){const state=voiceProfiles.read();return {...state,profiles:state.profiles.map(p=>({...p,status:voice.status({...config,...p.settings})}))};}
   function checkProfile(settings){if(settings.voiceProvider==='mimo'&&settings.mimoTtsMode==='clone')voice.reference(settings.mimoReferenceId);}
   function previewConfig(input){return input.profileId?{...config,...voiceProfiles.get(input.profileId).settings}:config;}
-  let napcatSyncBusy=false,managementNetwork=0;
+  let napcatSyncBusy=false,qqReceiveStarting=false,managementNetwork=0;
+  const qqConfig=()=>config.qqBackend==='shell'?qqRuntime.resolveConfig(config):config;
+  function expectedAccount(){if(!/^\d{5,20}$/.test(config.botQQ))throw Error('请先保存用于核验的机器人 QQ 账号');}
+  async function qqStatus(){
+    const receiving={state:bridge.status.state,channels:bridge.status.channels};
+    if(config.qqBackend!=='shell')return {...await qqControl.status(config),backend:'external',receiving};
+    const runtimeStatus=await qqRuntime.status(config);
+    let status={expectedAccount:config.botQQ,account:'',online:false,interfaceOnline:false,accountMatches:false,napcatReady:false,message:runtimeStatus.message};
+    if(runtimeStatus.process?.state==='running')try{status=await qqControl.status(qqConfig());}catch{}
+    if(!status.online&&!status.napcatReady)status.message=runtimeStatus.message;
+    const componentInvalid=runtimeStatus.component?.state==='invalid';
+    const processUnverified=runtimeStatus.process?.state==='orphaned'||runtimeStatus.process?.state==='exit_unconfirmed'||runtimeStatus.process?.state==='unknown'||runtimeStatus.process?.state==='running'&&runtimeStatus.process?.owned!==true;
+    const phase=componentInvalid?'component_invalid':processUnverified?'blocked':status.online&&!status.accountMatches?'account_mismatch':status.interfaceOnline&&status.accountMatches?(bridge.status.state==='running'?'receiving':'interface_ready'):status.online?'waiting_interface':status.napcatReady?'waiting_login':runtimeStatus.state;
+    let managementReason='';try{idleQQRuntime();}catch(error){managementReason=error.message;}
+    if(!managementReason&&!/^\d{5,20}$/.test(config.botQQ))managementReason='请先在连接页保存机器人 QQ 账号';
+    const activationReason=runtimeStatus.process?.state!=='stopped'?(runtimeStatus.process?.owned?'请先停止本项目的 QQ 登录进程，再切换或回退版本':'QQ 进程归属或退出状态未确认；不会停止其他 QQ，请先检查现有登录'):'';
+    return {...status,message:componentInvalid?(runtimeStatus.component?.message||runtimeStatus.message):processUnverified?runtimeStatus.message:status.message,backend:'shell',phase,runtime:runtimeStatus,receiving,management:{allowed:!managementReason,reason:managementReason,activationAllowed:!managementReason&&!activationReason,activationReason}};
+  }
   async function syncInterface(){
-    idleConfig();napcatSyncBusy=true;
-    try{return await syncNapcat(config,runtime);}finally{napcatSyncBusy=false;}
+    if(config.qqBackend==='shell')idleQQRuntime();else idleConfig();napcatSyncBusy=true;
+    try{if(config.qqBackend==='shell')return await qqRuntime.prepare(config);return await syncNapcat(config,runtime);}finally{napcatSyncBusy=false;}
   }
   function keys(){
-    const values=new Set(),dir=path.join(runtime,'memories');
+    const values=new Set(Object.keys(personaCards.read().chats)),dir=path.join(runtime,'memories');
     if(fs.existsSync(dir))for(const e of fs.readdirSync(dir,{withFileTypes:true}))if(e.isDirectory()&&!e.isSymbolicLink()&&/^[a-f0-9]{64}$/.test(e.name)){const meta=readJson(path.join(dir,e.name,'.runtime','store.json'),null);if(meta?.key)values.add(meta.key);}
     if(config.botQQ){for(const id of config.privateUsers)values.add(config.botQQ+'/private/'+id);for(const id of config.groups)values.add(config.botQQ+'/group/'+id);}
     return [...values];
   }
   function checkKey(key,writing=false,personaId){
     if(!keys().includes(key))throw Error('请选择已配置或已有记忆的聊天');
+    if(writing){
+      const scope=personaIdentity(runtime,key,personaId).memoryScope;
+      for(const other of keys()){
+        const shared=personaIdentity(runtime,other).memoryScope===scope;
+        if(shared&&(bridge.jobs?.has(other)||bridge.queues?.has(other)||bridge.maintenance?.has(other)||bridge.startup?.jobs.has(other)))throw Error('共享此人格的聊天正在处理消息，请稍后编辑');
+      }
+    }
     if(personaId!==undefined){personaCards.get(key,personaId);if(personaId!==personaCards.view(key).activeId)writing=false;}
     if(writing&&(bridge.jobs?.has(key)||bridge.queues?.has(key)||bridge.maintenance?.has(key)||bridge.startup?.jobs.has(key)))throw Error('该聊天正在处理消息，请稍后编辑');
   }
-  function managed(key,personaId){checkKey(key);personaId=personaCards.get(key,personaId).id;return {detail:management.inspect(key,personaId),roleState:currentRoleState(new MemoryStore(runtime,key,personaId)),personas:personaCards.view(key),personaVoice:voiceProfiles.selection(key,personaId),knowledge:new Knowledge(runtime,key,personaId).read(),policy:policyView(config,key).effective,lifecycle:(bridge.summary?.(config)??[]).filter(s=>s.key===key&&(s.personaId??'default')===personaId)};}
+  function managed(key,personaId){checkKey(key);personaId=personaCards.get(key,personaId).id;return {detail:management.inspect(key,personaId),roleState:currentRoleState(new MemoryStore(runtime,key,personaId)),personas:personaCards.view(key),reusablePersonas:keys().filter(k=>k.split('/')[0]===key.split('/')[0]).flatMap(k=>personaCards.view(k).cards.filter(c=>!c.source).map(c=>({key:k,...c}))),personaVoice:voiceProfiles.selection(key,personaId),knowledge:new Knowledge(runtime,key,personaId).read(),policy:policyView(config,key).effective,lifecycle:(bridge.summary?.(config)??[]).filter(s=>s.key===key&&(s.personaId??'default')===personaId)};}
   function policyScopes(){
     return ['private','group',...(config.botQQ?[
       ...config.privateUsers.map(id=>config.botQQ+'/private/'+id),
@@ -81,8 +110,12 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
   function checkPolicyScope(scope){if(!policyScopes().includes(scope))throw Error('请先在连接页配置机器人账号和允许的好友或群');}
   function policyPayload(scope){return {scopes:policyScopes(),overriddenScopes:Object.keys(config.chatPolicy.overrides),...policyView(config,scope)};}
   function idleConfig(){
-    if(napcatSyncBusy)throw Error('正在同步 NapCat 接口，请稍候');
+    if(napcatSyncBusy||qqReceiveStarting)throw Error('正在准备 QQ 接口或启用接收，请稍候');
     if(bridge.status.state!=='stopped'||bridge.status.active||bridge.startup?.jobs.size||bridge.maintenance?.size||bridge.jobs?.size||bridge.queues?.size||voice.busy)throw Error('请先停止 QQ 连接并等待语音及消息任务完成，再修改配置');
+  }
+  function idleQQRuntime(){
+    idleConfig();
+    if(bridge.outbox?.size||bridge.backgrounds?.size||bridge.deferredDrains?.size||bridge.deliveryWaits?.size||Object.values(bridge.state?.sessions??{}).some(session=>session.exitUnconfirmed))throw Error('旧回合退出或发送队列尚未确认完成，请等待确认后管理 QQ 登录或更换账号');
   }
   function audioInput(input,max=12*1024*1024){
     if(typeof input.audio!=='string'||input.audio.length>max||!/^[A-Za-z0-9+/]+={0,2}$/.test(input.audio))throw Error('音频格式不正确');
@@ -130,9 +163,16 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
       if (req.method==='GET' && assets.has(url.pathname)) {
         const [type,file]=assets.get(url.pathname); res.writeHead(200,{'Content-Type':type}); res.end(fs.readFileSync(path.join(here,'public',file))); return;
       }
-      if (req.method==='GET' && url.pathname==='/api/status') { json(res,200,{config:publicConfig(config),voice:voice.status(config),bridge:{...bridge.status,startups:bridge.startup?.summary()??[]},lifecycle:bridge.summary?.(config)??[],imports:importedStores(runtime)}); return; }
+      if (req.method==='GET' && url.pathname==='/api/status') { json(res,200,{config:publicConfig(config),voice:voice.status(config),bridge:{...bridge.status,startups:bridge.startup?.summary()??[]},lifecycle:bridge.summary?.(config)??[],imports:importedStores(runtime),...(validationMessage?{validationMessage}:{})}); return; }
+      if(req.method==='GET'&&url.pathname==='/api/model-profiles'){
+        const key=url.searchParams.get('key')||undefined,personaId=url.searchParams.get('personaId')||undefined,kind=url.searchParams.get('kind')||undefined;
+        if(key)checkKey(key,false,personaId);json(res,200,modelProfiles.view(key,personaId,kind));return;
+      }
+      if(req.method==='GET'&&url.pathname==='/api/model-catalog'){
+        const client=new DshClient(config);try{json(res,200,await client.rpc('session/modelCatalog'));}finally{client.close();}return;
+      }
       if(req.method==='GET'&&url.pathname==='/api/prompts'){
-        json(res,200,promptPayload(url.searchParams.get('key')||undefined,url.searchParams.get('personaId')||undefined));return;
+        json(res,200,promptPayload(url.searchParams.get('key')||undefined,url.searchParams.get('personaId')||undefined,url.searchParams.get('kind')||undefined));return;
       }
       if(req.method==='GET'&&url.pathname==='/api/manage/export'){
         const key=url.searchParams.get('key'),personaId=url.searchParams.get('personaId');checkKey(key,false,personaId);
@@ -140,7 +180,8 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
       }
       if(req.method==='GET'&&url.pathname==='/api/logs'){json(res,200,systemLog.read({level:url.searchParams.get('level')??'',component:url.searchParams.get('component')??''}));return;}
       if(req.method==='GET'&&url.pathname==='/api/logs/related'){
-        json(res,200,{...diagnosticLogs.read(config),flow:systemLog.read({component:'flow'}),dshEvents:systemLog.read({component:'dsh'}),status:{state:bridge.status.state,channels:bridge.status.channels,lastObservedAt:bridge.status.lastObservedAt,lastReceivedAt:bridge.status.lastReceivedAt,lastSentAt:bridge.status.lastSentAt,lastError:redactLog(bridge.status.lastError||'',diagnosticLogs.secrets(config))}});return;
+        let diagnosticsConfig=config;try{diagnosticsConfig=qqConfig();}catch{}
+        json(res,200,{...diagnosticLogs.read(diagnosticsConfig),flow:systemLog.read({component:'flow'}),dshEvents:systemLog.read({component:'dsh'}),status:{state:bridge.status.state,channels:bridge.status.channels,lastObservedAt:bridge.status.lastObservedAt,lastReceivedAt:bridge.status.lastReceivedAt,lastSentAt:bridge.status.lastSentAt,lastError:redactLog(bridge.status.lastError||'',diagnosticLogs.secrets(diagnosticsConfig))}});return;
       }
       if(req.method==='GET'&&url.pathname==='/api/chat-policy'){
         const scope=url.searchParams.get('scope')??'private';checkPolicyScope(scope);
@@ -182,19 +223,27 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
       if (req.method!=='POST') { json(res,404,{error:'页面不存在'}); return; }
       const input=await body(req);
       if(url.pathname==='/api/prompts'){
-        if(Object.keys(input).some(k=>!['key','personaId','revision','overrides'].includes(k)))throw Error('提示词保存参数无效');
+        if(Object.keys(input).some(k=>!['key','personaId','kind','revision','overrides'].includes(k)))throw Error('提示词保存参数无效');
         if(input.key){
           checkKey(input.key,true,input.personaId);
           const active=personaCards.view(input.key).activeId===input.personaId;
           if(active&&(bridge.status.state==='connecting'||bridge.status.channels?.[input.key.split('/')[1]]||bridge.awaitingExit?.(input.key)))throw Error('请先停止此人格所在类型的接收并等待任务结束，再保存提示词');
         }else idleConfig();
-        promptProfiles.save(input);json(res,200,promptPayload(input.key,input.personaId));return;
+        promptProfiles.save(input);json(res,200,promptPayload(input.key,input.personaId,input.kind));return;
       }
       if(url.pathname==='/api/persona-cards/rename'){
         checkKey(input.key,true,input.personaId);personaCards.rename(input);json(res,200,managed(input.key,input.personaId));return;
       }
       const started=Date.now();
       res.once('finish',()=>systemLog.record(res.statusCode<400?'operation.completed':'operation.failed',{level:res.statusCode<400?'info':'error',component:url.pathname.includes('/voice/')?'voice':url.pathname.includes('/qq/')||url.pathname.includes('/bridge/')?'qq':url.pathname.includes('/manage/')?'memory':'panel',operation:url.pathname,durationMs:Date.now()-started}));
+      if(url.pathname==='/api/model-profiles'){
+        idleConfig();if(input.key)checkKey(input.key,false,input.personaId);
+        json(res,200,modelProfiles.save(input));return;
+      }
+      if(url.pathname==='/api/persona-cards/reuse'){
+        checkKey(input.key);checkKey(input.sourceKey,false,input.sourcePersonaId);
+        const card=personaCards.reuse(input);json(res,200,managed(input.key,card.id));return;
+      }
       if(url.pathname==='/api/persona-cards/create'){
         checkKey(input.key);const card=personaCards.create(input);
         json(res,200,managed(input.key,card.id));return;
@@ -286,9 +335,15 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
         const voiceFields=['voice','model','voiceProvider','mimoApiKey','mimoTtsMode','mimoVoice','mimoReferenceId','mimoStyle','mimoDesign','mimoAsrLanguage','clearMimoApiKey'];
         const patch=url.pathname==='/api/voice/config'?Object.fromEntries(Object.entries(input).filter(([key])=>voiceFields.includes(key))):input;
         const next=validate(patch,config); voice.checkConfig?.(next);
+        if(['qqBackend','botQQ'].some(k=>next[k]!==config[k]))idleQQRuntime();
+        if(config.qqBackend==='shell'&&['qqBackend','botQQ'].some(k=>next[k]!==config[k])){
+          const state=await qqRuntime.status(config);
+          const unpreparedExternal=state.component?.state==='missing'&&state.process?.owned!==true&&state.process?.state==='orphaned';
+          if(state.process?.state!=='stopped'&&!unpreparedExternal)throw Error('请先停止 QQ 登录进程并确认退出，再更换账号或接入方式');
+        }
         writeJson(configFile,next); config=next;
         let napcatSync;
-        if(url.pathname==='/api/config'&&['botQQ','qqUrl','qqToken','clearQqToken','napcatFrameworkDir'].some(k=>Object.hasOwn(input,k))){
+        if(config.qqBackend==='external'&&url.pathname==='/api/config'&&['botQQ','qqUrl','qqToken','clearQqToken','napcatFrameworkDir'].some(k=>Object.hasOwn(input,k))){
           try{napcatSync=await syncInterface();}catch(error){napcatSync={state:'pending',message:'面板已保存，但接口未同步：'+error.message};}
         }
         json(res,200,{config:publicConfig(config),napcatSync});
@@ -310,13 +365,30 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
       } else if (url.pathname==='/api/dsh/probe') {
         const dsh=new DshClient(config);
         try { const presets=await dsh.probe(); json(res,200,{ok:true,presets}); } finally { dsh.close(); }
-      } else if(url.pathname==='/api/qq/probe') json(res,200,await probeQQ(config));
-      else if(url.pathname==='/api/qq/control/status')json(res,200,await qqControl.status(config));
-      else if(url.pathname==='/api/qq/control/qrcode'){idleConfig();json(res,200,await qqControl.qrcode(config));}
-      else if(url.pathname==='/api/qq/control/contacts')json(res,200,await qqControl.contacts(config,input.kind));
+      } else if(url.pathname==='/api/qq/probe') {expectedAccount();json(res,200,await probeQQ(qqConfig()));}
+      else if(url.pathname==='/api/qq/control/status'||url.pathname==='/api/qq/runtime/status')json(res,200,await qqStatus());
+      else if(url.pathname==='/api/qq/control/qrcode'){idleConfig();expectedAccount();json(res,200,await qqControl.qrcode(qqConfig()));}
+      else if(url.pathname==='/api/qq/control/contacts'){expectedAccount();json(res,200,await qqControl.contacts(qqConfig(),input.kind));}
+      else if(url.pathname==='/api/qq/runtime/prepare'){idleConfig();if(config.qqBackend!=='shell')throw Error('请先选择项目管理 QQ 接入');json(res,200,await syncInterface());}
+      else if(['/api/qq/runtime/version/install','/api/qq/runtime/version/activate','/api/qq/runtime/version/rollback'].includes(url.pathname)){
+        idleQQRuntime();if(config.qqBackend!=='shell')throw Error('当前使用外部 QQ 接入，不能管理项目组件版本');expectedAccount();
+        const operation=url.pathname.split('/').at(-1),allowed=operation==='rollback'?['expectedActiveId','expectedRevision']:operation==='install'?['versionId']:['versionId','expectedActiveId','expectedRevision'];
+        if(Object.keys(input).some(key=>!allowed.includes(key)))throw Error('组件版本操作参数无效');
+        if(operation!=='rollback'&&(typeof input.versionId!=='string'||!input.versionId||input.versionId.length>100))throw Error('请从受控版本列表选择组件');
+        if(operation!=='install'&&(typeof input.expectedActiveId!=='string'||input.expectedActiveId.length>100))throw Error('请刷新版本状态后再切换');
+        if(operation!=='install'&&(!Number.isSafeInteger(input.expectedRevision)||input.expectedRevision<0))throw Error('请刷新版本修订状态后再切换');
+        napcatSyncBusy=true;
+        try{const method={install:'installVersion',activate:'activateVersion',rollback:'rollback'}[operation];json(res,200,await qqRuntime[method](config,input));}finally{napcatSyncBusy=false;}
+      }
+      else if(url.pathname==='/api/qq/runtime/start'||url.pathname==='/api/qq/runtime/stop'){
+        idleQQRuntime();if(config.qqBackend!=='shell')throw Error('当前使用外部 QQ 接入');
+        if(url.pathname.endsWith('/start'))expectedAccount();
+        napcatSyncBusy=true;
+        try{json(res,200,await qqRuntime[url.pathname.endsWith('/start')?'start':'stop'](config));}finally{napcatSyncBusy=false;}
+      }
       else if(url.pathname==='/api/qq/desktop-check') json(res,200,await desktop.inspect(config));
       else if(url.pathname==='/api/qq/sync') json(res,200,await syncInterface());
-      else if(url.pathname==='/api/qq/desktop-start') { await syncInterface();json(res,200,await desktop.start(config)); }
+      else if(url.pathname==='/api/qq/desktop-start') { if(config.qqBackend==='shell')throw Error('请使用“启动 QQ 登录”管理项目 QQ 进程');await syncInterface();json(res,200,await desktop.start(config)); }
       else if(url.pathname==='/api/session/new'){
         if(typeof input.key!=='string'||!/^\d{5,20}\/(?:private|group)\/\d{5,20}$/.test(input.key))throw Error('请选择一个现有聊天');
         if(input.personaId&&input.personaId!==personaCards.view(input.key).activeId)throw Error('只能为当前正在使用的人格开启新会话');
@@ -324,8 +396,28 @@ export function createApp({ root = path.dirname(here), runtime = path.join(here,
       }
       else if (url.pathname==='/api/bridge/start') {
         const kind=input.kind??'all';if(!['all','private','group'].includes(kind))throw Error('请选择私聊、群聊或全部');
-        if(bridge.status.state==='stopped')await syncInterface();
-        await bridge.start(config,kind,{resumeCompleted:input.resumeCompleted===true});json(res,200,bridge.status);
+        expectedAccount();
+        if(napcatSyncBusy||qqReceiveStarting)throw Error('QQ 接口管理或启用接收正在进行，请稍候');
+        if(!(kind==='group'?config.groups:kind==='private'?config.privateUsers:[...config.privateUsers,...config.groups]).length)throw Error('请先明确选择需要接收的好友或群');
+        if(bridge.status.state==='stopped'&&config.qqBackend==='external')await syncInterface();
+        qqReceiveStarting=true;const generation=bridge.generation;
+        try{
+          if(config.qqBackend==='shell'){
+            const state=await qqRuntime.status(config);
+            if(state.component?.state==='invalid'){
+              const reason=state.component.message||state.message||'QQ Shell 本地组件校验失败';
+              const processHint=state.process?.state==='running'?' 登录进程仍在运行；请先安全停止后再修复组件。':'';
+              throw Error(reason+processHint);
+            }
+            if(state.component?.state!=='verified')throw Error(state.process?.state==='running'?'QQ Shell 组件尚未通过校验，登录进程仍在运行；请核实并安全停止进程后再处理组件。':'QQ Shell 组件尚未通过校验，不能启用接收；请先检查 QQ Shell 状态。');
+            if(state.process?.state==='stopped')throw Error('请先启动本项目管理的 QQ 登录进程，再启用接收。');
+            if(state.process?.state!=='running'||state.process?.owned!==true)throw Error((state.message||'QQ 登录进程归属或运行状态未确认')+'；不能启用接收。');
+          }
+          const connection=qqConfig();
+          if(config.qqBackend==='shell')await probeQQ(connection);
+          if(generation!==bridge.generation)throw Error('接收启动已被停止操作取消');
+          await bridge.start(connection,kind,{resumeCompleted:input.resumeCompleted===true});json(res,200,bridge.status);
+        }finally{qqReceiveStarting=false;}
       }
       else if (url.pathname==='/api/bridge/resume') {
         if(typeof input.key!=='string'||!bridge.state.maintenanceInbox[input.key])throw Error('请选择已有消息队列');

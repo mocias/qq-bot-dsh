@@ -1,8 +1,8 @@
-export function mountPromptEditor({request,notice}){
+export function mountPromptEditor({request,notice,onSelect=()=>{},getContext=()=>({})}){
   const $=id=>document.getElementById(id),drafts=new Map();
   let data=null,scope='',section='',serial=0,busy=false;
-  const token=(key,personaId)=>key?JSON.stringify([key,personaId]):'';
-  const target=value=>value?Object.fromEntries(['key','personaId'].map((k,i)=>[k,JSON.parse(value)[i]])):{};
+  const token=(key,personaId,kind)=>key?JSON.stringify([key,personaId]):kind?'scene:'+kind:'';
+  const target=value=>value.startsWith('scene:')?{kind:value.slice(6)}:value?Object.fromEntries(['key','personaId'].map((k,i)=>[k,JSON.parse(value)[i]])):{};
   const same=(a,b)=>JSON.stringify(Object.entries(a).sort())===JSON.stringify(Object.entries(b).sort());
   function lock(value){busy=value;for(const id of ['prompt-save','prompt-scope','prompt-section','prompt-search','prompt-override','prompt-reset','prompt-reset-all','prompt-reload','prompt-text'])$(id).disabled=value;if(!value&&data)editor();}
   function stash(){if(!data)return;if(!dirty()){drafts.delete(scope);return;}drafts.set(scope,{revision:data.revision,overrides:{...data.overrides},dirty:true});}
@@ -12,8 +12,8 @@ export function mountPromptEditor({request,notice}){
   function editor(){
     const e=data.catalog.find(x=>x.id===section);$('prompt-editor').hidden=!e;if(!e)return;
     const custom=Object.hasOwn(data.overrides,e.id);
-    $('prompt-title').textContent=e.title;$('prompt-meta').textContent=e.when+' · '+e.source;
-    $('prompt-override').checked=custom;$('prompt-override-label').textContent=data.scope==='global'?'使用自定义内容':'此人格单独覆盖';
+    $('prompt-title').textContent=e.title;$('prompt-meta').textContent=(data.kind==='private'?'私聊注入':data.kind==='group'?'群聊注入':'通用默认，可被场景覆盖')+' · '+e.when+' · '+e.source;
+    $('prompt-override').checked=custom;$('prompt-override-label').textContent=data.scope==='persona'?'此人格单独覆盖':'使用自定义内容';
     $('prompt-text').value=custom?data.overrides[e.id]:data.inherited[e.id];$('prompt-text').disabled=!custom||busy;
     $('prompt-reset').textContent=data.scope==='global'?'恢复此项内置默认':'此项恢复继承';
     $('prompt-default').textContent=data.inherited[e.id];$('prompt-count').textContent=$('prompt-text').value.length+' 字符';status();
@@ -25,15 +25,18 @@ export function mountPromptEditor({request,notice}){
     if(!rows.some(e=>e.id===section))section=rows[0]?.id??'';sel.value=section;editor();
   }
   function paint(result,restore=true){
-    scope=token(result.key,result.personaId);
+    onSelect({key:result.key,personaId:result.personaId,kind:result.kind});
+    scope=token(result.key,result.personaId,result.kind);
     const draft=restore?drafts.get(scope):null;
     data={...result,saved:{...result.overrides},overrides:draft?{...draft.overrides}:{...result.overrides},stale:!!draft&&draft.revision!==result.revision};
     if(draft)data.revision=draft.revision;
     const select=$('prompt-scope');select.replaceChildren(new Option('全局默认',''));
-    for(const t of result.targets)for(const c of t.cards){const [,kind,id]=t.key.split('/');select.add(new Option(`${kind==='group'?'群聊':'私聊'} ${id} · ${c.name}${c.id===t.activeId?'（当前使用）':''}`,token(t.key,c.id)));}
+    const filter=getContext().kind;
+    for(const kind of ['private','group'])if(!filter||filter===kind)select.add(new Option(kind==='private'?'私聊默认提示词':'群聊默认提示词','scene:'+kind));
+    for(const t of result.targets)if(!filter||t.key.split('/')[1]===filter)for(const c of t.cards){const [,kind,id]=t.key.split('/');select.add(new Option(`${kind==='group'?'群聊':'私聊'} ${id} · ${c.name}${c.id===t.activeId?'（当前使用）':''}`,token(t.key,c.id)));}
     select.value=scope;$('prompt-components').replaceChildren();
     for(const item of result.components){const p=document.createElement('p'),b=document.createElement('strong');b.textContent=item.name+'：';p.append(b,item.location);$('prompt-components').append(p);}
-    $('prompt-scope-hint').textContent=result.scope==='global'?'未单独覆盖的人格继承这里；未自定义的项目使用内置默认。':'当前仅编辑 '+result.personaName+'。未勾选单独覆盖的项目随全局默认更新。';
+    $('prompt-scope-hint').textContent=result.scope==='global'?'通用覆盖影响两种聊天；场景默认和人格覆盖优先。私聊、群聊内置风格分别维护。':result.scope==='scene'?'只修改此聊天类型的默认提示词；人格可进一步单独覆盖。':'当前仅编辑 '+result.personaName+'。未覆盖项继承对应聊天类型，再继承全局设置。';
     list();
   }
   async function load(value=$('prompt-scope').value,restore=true){
@@ -42,7 +45,7 @@ export function mountPromptEditor({request,notice}){
     catch(e){if(n===serial){$('prompt-scope').value=scope;notice(e.message,true);}}
     finally{if(n===serial)lock(false);}
   }
-  $('prompt-scope').onchange=()=>{stash();load();};
+  $('prompt-scope').onchange=()=>{stash();onSelect(target($('prompt-scope').value));load();};
   $('prompt-section').onchange=()=>{section=$('prompt-section').value;editor();};
   $('prompt-search').oninput=()=>data&&list();
   $('prompt-override').onchange=()=>{
@@ -60,5 +63,5 @@ export function mountPromptEditor({request,notice}){
     catch(e){notice(e.message,true);}finally{lock(false);}
   };
   window.addEventListener('beforeunload',e=>{if(dirty()||[...drafts].some(([k,d])=>k!==scope&&d.dirty)){e.preventDefault();e.returnValue='';}});
-  return {load:()=>{if(busy)return Promise.resolve();stash();return load(scope);}};
+  return {isBusy:()=>busy,load:()=>{if(busy)return Promise.resolve();stash();const c=getContext();return load(token(c.key,c.personaId,c.kind));}};
 }

@@ -13,7 +13,7 @@ import {resolveChatConfig,fieldsFor} from '../lib/chat-policy.mjs';
 import {resetMemories} from '../lib/reset-memory.mjs';
 import {createApp} from '../server.mjs';
 const key='100000001/group/100000003',other='100000001/private/100000002';
-const conf={...defaults,botQQ:'100000001',groups:['100000003'],privateUsers:['100000002'],groupPreset:'test',privatePreset:'test',qqVoiceSend:false,memoryEnabled:false};
+const conf={...defaults,qqBackend:'external',botQQ:'100000001',groups:['100000003'],privateUsers:['100000002'],groupPreset:'test',privatePreset:'test',qqVoiceSend:false,memoryEnabled:false};
 const route={key,id:'100000003',group:true,sender:'100000002',text:'你好',messageId:key+'/1',qqMessageId:'1',inboxSeq:1};
 const env=(reply='',actions=[])=>JSON.stringify({reply,memory:[],actions});
 function temp(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'qq-v012-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
@@ -87,7 +87,7 @@ test('a failed model continuation sends no queued messages',async t=>{
   await assert.rejects(bridge.handle({...route},0),/model failed/);assert.equal(sent.length,0);
 });
 test('commands, reply batches and poke share serial output receipts and stop invalidates queued sends',async t=>{
-  const {bridge,sent}=fixture(t,{pokeSend:true});let release;
+  const {bridge,sent}=fixture(t,{qqBackend:'external',pokeSend:true});let release;
   bridge.socket.send=raw=>{const f=JSON.parse(raw);sent.push(f);release=()=>bridge.pending.get(f.echo)?.({status:'ok',retcode:0,data:{message_id:42}});};
   const a=bridge.sendText(route,'第一条','command');
   const b=bridge.sendPlan(route,{action:'group_poke',params:{group_id:route.id,user_id:route.sender}});
@@ -100,7 +100,7 @@ test('commands, reply batches and poke share serial output receipts and stop inv
   await assert.rejects(c,/不会自动重试/);assert.equal(await d,false);assert.equal(sent.length,3);
 });
 test('private and group poke use scoped OneBot actions and persistent cooldown',async t=>{
-  const {bridge,sent}=fixture(t,{pokeSend:true});let n=0;
+  const {bridge,sent}=fixture(t,{qqBackend:'external',pokeSend:true});let n=0;
   bridge.dsh.prompt=async()=>n++===0?env('',[{tool:'qq_send_poke',args:{targetUserId:route.sender}}]):env('');
   await bridge.handle({...route},0);
   assert.equal(sent.filter(f=>f.action==='group_poke').length,1);

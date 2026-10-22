@@ -148,6 +148,7 @@ test('timer participation yields both before and during candidate selection to b
 });
 async function panel(t){
  const runtime=temp(t),voice=new VoiceService(runtime,runtime),qqControl={status:async config=>({expectedAccount:config.botQQ,message:'mock-online'}),qrcode:async()=>({image:'data:image/png;base64,test'}),contacts:async()=>({items:[]})};
+ writeJson(path.join(runtime,'config.private.json'),{qqBackend:'external'});
  const app=createApp({runtime,voice,qqControl});app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
  t.after(async()=>{app.bridge.stop();await new Promise(r=>app.server.close(r));});
  const origin=new URL(app.loginUrl()).origin,login=await fetch(app.loginUrl(),{redirect:'manual'}),cookie=login.headers.get('set-cookie').split(';')[0];

@@ -876,7 +876,7 @@ for(const group of [false,true])test(`native ${group?'group':'private'} compress
 });
 
 
-test('absence saves handoff, digests without sending, sleeps and restores persona plus handoff in the same session',async t=>{
+test('absence saves handoff, digests without sending, resumes waiting and restores persona plus handoff in the same session',async t=>{
   let f,phase=0,clock=100000;
   const h=await harness(t,async({call,message,registered,contexts,agent})=>{
     phase++;
@@ -897,7 +897,7 @@ test('absence saves handoff, digests without sending, sleeps and restores person
   });
   f=bridgeFixture(t,{...h.config,userAwaySeconds:1800},h.client);f.bridge.now=()=>clock;f.session.lastHumanMessageAt=clock;
   f.session.promptVersion=2;f.session.conversationPolicyVersion=6;f.session.promptProfileRevision=new PromptProfiles(f.root).resolve(f.route.key).promptProfileRevision;
-  await f.bridge.handle(f.route,0);assert.equal(f.session.absence.phase,'asleep');assert.equal(f.session.absence.memorySaved,true);assert.ok(f.bridge.memory(f.route.key).hasReceipt(f.session.absence.digestId));assert.equal(phase,2);assert.deepEqual(text(f.sent),['收到']);
+  await f.bridge.handle(f.route,0);assert.equal(f.session.absence.phase,'active');assert.equal(f.session.loopResumePending,true);assert.equal(f.session.absence.memorySaved,true);assert.ok(f.bridge.memory(f.route.key).hasReceipt(f.session.absence.digestId));assert.equal(phase,2);assert.deepEqual(text(f.sent),['收到']);
   clock+=1000;await f.bridge.handle({...f.route,messageId:'m2',qqMessageId:'2',text:'我回来了'},0);
   assert.equal(f.session.id,'session');assert.equal(f.session.absence.phase,'active');assert.deepEqual(text(f.sent),['收到','回来啦']);assert.equal(Object.keys(f.bridge.state.sessions).length,1);
 });
@@ -914,7 +914,7 @@ test('DSH scheduled wake restores QQ tools in sleeping original session and send
   const router=new ScheduleWakeRouter({agents:{get:id=>id==='session'?h.agent:null}},f.root);t.after(()=>router.dispose());
   const message={source:{kind:'schedule'},content:[{type:'text',text:'[SCHEDULE REMINDER] occurrence:unique; 分享有意思的事'}]};
   h.agent.followup(message);assert.equal(phase,0);f.bridge.drainScheduledWakes();await f.bridge.queues.get(f.route.key);
-  assert.equal(phase,1);assert.deepEqual(text(f.sent),['刚想到一件有意思的事']);assert.equal(f.session.absence.phase,'asleep');assert.equal(f.session.lastHumanMessageAt,1);
+  assert.equal(phase,1);assert.deepEqual(text(f.sent),['刚想到一件有意思的事']);assert.equal(f.session.absence.phase,'active');assert.equal(f.session.loopResumePending,true);assert.equal(f.session.lastHumanMessageAt,1);
   h.agent.followup(message);f.bridge.drainScheduledWakes();assert.equal(phase,1);
   const p=wakePaths(f.root);assert.equal(readWakeJson(path.join(p.queue,fs.readdirSync(p.queue)[0])).state,'completed');
 });
@@ -929,6 +929,6 @@ test('interrupted departure finishes in original session before queued arrivals 
   f.session.absence={phase:'handoff',at:1};f.session.blocked=true;
   f.bridge.deferForMaintenance({...f.route,messageId:'waiting-arrival'});
   await f.bridge.sweep();
-  assert.equal(phase,1);assert.equal(f.session.id,'session');assert.equal(f.session.absence.phase,'asleep');assert.equal(f.sent.length,0);
+  assert.equal(phase,1);assert.equal(f.session.id,'session');assert.equal(f.session.absence.phase,'active');assert.equal(f.session.loopResumePending,true);assert.equal(f.sent.length,0);
   assert.equal(f.bridge.state.maintenanceInbox[f.route.key].find(r=>r.route.messageId==='waiting-arrival').state,'pending');
 });

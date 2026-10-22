@@ -14,6 +14,7 @@ import {closingAbsence} from './absence.mjs';
 const sending=name=>/^qq_(send_message|reply|send_media|send_poke|send_sticker|group_send_image)$/.test(name);
 
 export function nativePrompt(store,route,config,{bootstrap,persona,knowledge,delegationPolicyUpdate=false,conversationPolicyUpdate=false}){
+  config={...config,promptScene:route.group?'group':'private'};
   return [
     !route.trigger?promptText(config,'chat.input.1'):'',
     bootstrap?promptText(config,'chat.input.2'):'',
@@ -30,17 +31,18 @@ export function nativePrompt(store,route,config,{bootstrap,persona,knowledge,del
     !route.trigger&&(bootstrap||delegationPolicyUpdate)?promptText(config,'chat.delegation'):'',
     !route.trigger&&(bootstrap||conversationPolicyUpdate)?promptText(config,'chat.continuous'):'',
     route.trigger?promptText(config,'chat.input.6'):
-      route.worldSimulation?promptText(config,'chat.input.7'):route.ambient?promptText(config,'chat.input.8'):promptText(config,'chat.input.9'),
+      route.loopResume?promptText(config,'loop.resume'):route.worldSimulation?promptText(config,'chat.input.7'):route.ambient?promptText(config,'chat.input.8'):promptText(config,'chat.input.9'),
     promptText(config,'chat.input.10')+JSON.stringify({...route.compactView??messageSnapshot(route),...(!route.trigger?{'真实世界模拟':worldSimulationPrompt(route.modelInputAt,route.roleSimulation,config),...(store&&config.memoryEnabled?{'当前人格状态':currentRoleState(store)}:{})}:{})})
   ].filter(Boolean).join('\n\n');
 }
-export function nativeTurn({config,route,session,store,tools,messaging,job,isCurrent,persist=()=>{}}){
+export function nativeTurn({config,route,session,store,tools,messaging,job,isCurrent,persist=()=>{},onModelWarning}){
   const allowed=selectedTools(config,route);
   const roleState=job.continuous&&config.memoryEnabled?new RoleState(store,session,{persist,config}):null;
   const handoff=job.continuous?new ChatHandoff({store,session,route,inputs:()=>job.inputs,config}):null;
   if(handoff)session.handoffEnabled=true;
-  return {allowed,promptRules:config.promptRules,continuous:!!job.continuous,handoff:!!handoff,handoffPending:!!handoff?.state.pending,awayRequested:session.absence?.phase==='handoff',
+  return {modelSettings:session.modelSettings??config.modelSettings,allowed,promptRules:config.promptRules,continuous:!!job.continuous,handoff:!!handoff,handoffPending:!!handoff?.state.pending,awayRequested:session.absence?.phase==='handoff',
     departed:()=>session.absence?.phase==='digest',
+    onModelWarning:warnings=>{session.modelWarnings=warnings.slice(0,5);persist();onModelWarning?.(warnings);},
     control:handoff?(action,args)=>{
       if(!isCurrent())throw Error('当前聊天已停止');
       if(action==='begin'&&args.reason==='user-away'&&roleState?.required())throw Error('请先保存尚未完成的角色推演状态，再创建离开交接');

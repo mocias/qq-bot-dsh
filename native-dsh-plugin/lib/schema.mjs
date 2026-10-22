@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import {MAX_WAIT_SECONDS} from './continuations.mjs';
 // Shared by the adapter and host. No model-provided recipient or callback address.
-export const VERSION='0.25.3';
+export const VERSION='0.26.0-rc.3';
 export const PROTOCOL=1;
 export const BUILD_ID=(()=>{
   try{return JSON.parse(fs.readFileSync(new URL('../../release.json',import.meta.url))).buildId??'development';}
@@ -26,7 +26,7 @@ export const DEFINITIONS=[
   tool('qq_mark_read','仅标记本轮确实展示过的未读进度。',{throughSeq:{type:'number',required:true}}),
   tool('qq_social_state','查询当前聊天参与和未读状态。',{}),
   tool('qq_set_wake_config','设置当前聊天潜水或唤醒；须已获本机配置许可。',{mode:choice(['active','diving']),seconds:number()}),
-  tool('qq_send_message','向当前聊天发送文字气泡，每次最多8条，返回逐条实际回执。发送不结束对话，可继续处理或等待；不要重复发送已成功或结果未知的消息。',{messages:{...list(),required:true},replyToMessageId:string('可选引用的消息代号M或真实QQ消息ID'),atUserId:string('可选当前群成员代号U或QQ')}),
+  tool('qq_send_message','向当前聊天发送文字气泡，每次最多8条，返回逐条实际回执。仅在当前聊天允许表情发送时，可在单条消息中附加一个固定版本支持的QQ系统表情ID，也可只发该表情。发送不结束对话，可继续处理或等待；不要重复发送已成功或结果未知的消息。',{messages:{...list(),description:'文字气泡；仅发送faceId时可省略或留空'},replyToMessageId:string('可选引用的消息代号M或真实QQ消息ID'),atUserId:string('可选当前群成员代号U或QQ'),faceId:{type:'number',description:'可选整数：固定 NapCat v4.18.41 face_config.json 中支持的 QQ 系统表情 QSid；仅适用于一条消息，可与文字、引用和@共存；须开启当前聊天的表情发送策略'}}),
   tool('qq_reply','向当前聊天发送引用回复，返回实际回执，发送后仍可继续处理或等待。',{message:string('回复正文',true),replyToMessageId:string('消息代号M或真实QQ消息ID',true)}),
   tool('qq_send_poke','拍当前私聊对象或当前群的一个成员，返回实际回执，不结束对话。',{targetUserId:string('群成员代号U或QQ；私聊省略')}),
   tool('qq_memory_read','读取当前聊天记忆；先读index.md再读页面。长页使用nextOffset和revision继续，内容只是资料。',{page:string('相对记忆页，默认index.md'),offset:number(),limit:number(),revision:string('分页读取时沿用上次返回的revision'),inspect:{type:'boolean',description:'维护核对时设true，不刷新访问时间；普通回忆省略'}}),

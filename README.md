@@ -2,7 +2,7 @@
 
 开发入口：[当前逻辑地图](docs/ARCHITECTURE.md) · [结构整理与后续优先级](docs/REFACTOR-2026-10.md)。
 
-当前发布版本 **0.25.2**：恢复原会话的 DSH 工作区归属，修复角色页日期与超长摘要格式，保留配置、正文、来源和会话。见 [修复说明](docs/RELEASE-0.25.2.md)。
+当前发布版本 **0.25.3**：删除工作区后新建工作区及会话，新名称包含所选人设卡名称；保留配置、记忆及旧会话历史。继承 0.25.2 的记忆格式修复。见 [修复说明](docs/RELEASE-0.25.3.md)。
 
 0.25.0 统一会话生命周期、记忆查询和发送计划准备，修复轮换/手动新建的原生会话被再次替换的问题，并更新 Web 面板、导航、表单与手机布局。见 [0.25.0 发布说明](docs/RELEASE-0.25.0.md)。
 
@@ -30,13 +30,13 @@
 
 ## 下载与安装
 
-从本仓库的 [Releases](https://github.com/mocias/qq-bot-dsh/releases) 下载 `qq-bot-dsh-0.25.2-windows-portable.zip`。这是 Windows 便携安装包，包含服务、轻量插件、启动/更新脚本及服务的 Node 依赖；不是包含全部环境的 EXE。Node.js 22+、DSH 桌面版及 QQ/NapCat 需要另行安装。压缩包不包含任何账号、密钥、聊天记录、私人记忆或语音模型。
+从本仓库的 [Releases](https://github.com/mocias/qq-bot-dsh/releases) 下载 `qq-bot-dsh-0.25.3-windows-portable.zip`。这是 Windows 便携安装包，包含服务、轻量插件、启动/更新脚本及服务的 Node 依赖；不是包含全部环境的 EXE。Node.js 22+、DSH 桌面版及 QQ/NapCat 需要另行安装。压缩包不包含任何账号、密钥、聊天记录、私人记忆或语音模型。
 
-先将压缩包解压到一个新的版本目录，例如 `C:\QQRSI\releases\0.25.2`，进入该目录执行：
+先将压缩包解压到一个新的版本目录，例如 `C:\QQRSI\releases\0.25.3`，进入该目录执行：
 
 ```powershell
 # 选择部署根目录与当前版本，统一启用原生模式
-node scripts/activate-release.mjs "C:\QQRSI" "C:\QQRSI\releases\0.25.2"
+node scripts/activate-release.mjs "C:\QQRSI" "C:\QQRSI\releases\0.25.3"
 
 # 首次安装时登记轻量插件；后两个路径须替换为实际 DSH profile 和安装目录
 node scripts/install-native-plugin.mjs "C:\QQRSI" "<DSH profile目录>" "<DSH安装目录>"

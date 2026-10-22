@@ -6,8 +6,10 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {repairWorkspaceMembership} from '../../native-dsh-plugin/lib/workspace-link.mjs';
 import {VERSION,PROTOCOL,BUILD_ID} from '../../native-dsh-plugin/lib/schema.mjs';
+import {Bridge} from '../lib/bridge.mjs';
+import {validate} from '../lib/config.mjs';
 
-test('installed DSH registry restores existing session membership across deletion and reload without touching archive or pins',{
+test('installed DSH registry inspection preserves membership and never recreates a deleted registration',{
   skip:!process.env.QQ_RSI_DSH_SDK_ROOT
 },async t=>{
   const {WorkspaceRegistry}=await import(process.env.QQ_RSI_DSH_SDK_ROOT.replace(/\/$/,'')+'/dsh-workspace/lib/index.js');
@@ -25,13 +27,23 @@ test('installed DSH registry restores existing session membership across deletio
   }
   const request={sessionId:'original-session',workspacePath:workspace,version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID};
   let r=registry(),ctx={workspaceRegistry:r,sessionPersistence:r.ctx.sessionPersistence};
+  assert.equal((await repairWorkspaceMembership(ctx,root,request)).status,'registration-missing');assert.equal(records.size,0);
+  const existing=await r.create(workspace);await existing.attachSession('original-session');
   const first=await repairWorkspaceMembership(ctx,root,request);assert.deepEqual(r.get(first.workspaceId).sessionIds,['original-session']);
   await r.get(first.workspaceId).setTitle('用户自定义工作区');await repairWorkspaceMembership(ctx,root,request);
   assert.equal(r.get(first.workspaceId).title,'用户自定义工作区');assert.equal(records.size,1);
   r=registry();await r.replaceHeaderIndex(headers);r.rebuildEntities();ctx={workspaceRegistry:r,sessionPersistence:r.ctx.sessionPersistence};
   await repairWorkspaceMembership(ctx,root,request);assert.equal(records.size,1);assert.equal(r.get(first.workspaceId).title,'用户自定义工作区');
   await r.delete(first.workspaceId);assert.equal(records.size,0);
-  const restored=await repairWorkspaceMembership(ctx,root,request);assert.deepEqual(r.get(restored.workspaceId).sessionIds,['original-session']);
+  assert.equal((await repairWorkspaceMembership(ctx,root,request)).status,'registration-missing');assert.equal(records.size,0);
+  const bridge=new Bridge(root);bridge.config=validate({botQQ:'100000001',privateUsers:['100000002'],privatePreset:'test',dshNativeTools:true});
+  const route={key:'100000001/private/100000002',id:'100000002',group:false},scope=bridge.scope(route);
+  bridge.state.sessions[scope]={id:'original-session',workspace,preset:'test',transport:'native-v1',route,blocked:false};
+  bridge.dsh={rename:async()=>{},createSession:async dir=>{const id='fresh-session';headers.push({id,cwd:dir,createdAt:2});const item=await r.create(dir);await item.attachSession(id);return id;},
+    ensureWorkspace:async(sessionId,workspacePath,workspaceId)=>{const result=await repairWorkspaceMembership(ctx,root,{...request,sessionId,workspacePath,workspaceId});if(result.status!=='ready')throw Object.assign(Error('deleted workspace'),{notSubmitted:true,workspaceResetRequired:true});return result;}};
+  const fresh=await bridge.ensureStartupSession(route);
+  assert.equal(fresh.id,'fresh-session');assert.notEqual(fresh.workspace,workspace);assert.match(fresh.workspace,/默认人格/);
+  assert.deepEqual(r.get(fresh.workspaceId).sessionIds,['fresh-session']);assert.equal(records.size,1);
   assert.deepEqual(state.archivedSessionIds,['old-archived']);assert.deepEqual(state.pinnedSessionIds,['pinned-other']);assert.equal(headers[0].id,'original-session');
 });
 
@@ -50,7 +62,7 @@ test('installed Cordis enforces the native entry service dependencies during wor
     class Stub extends Service{constructor(c){super(c,name);
       if(name==='sessions')this.get=()=>undefined;
       if(name==='sessionPersistence')this.list=async()=>[{header:{id:'original',cwd:workspace}}];
-      if(name==='workspaceRegistry')this.create=async dir=>({id:'restored',path:dir,sessionIds:[],async attachSession(id){this.sessionIds.push(id);}});
+      if(name==='workspaceRegistry')this.list=()=>[{id:'known',path:workspace,sessionIds:['original']}];
     }}
     fibers.push(await ctx.plugin(Stub));
   }

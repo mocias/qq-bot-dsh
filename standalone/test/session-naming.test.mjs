@@ -31,15 +31,15 @@ function compact(bridge,session){
 test('first and manual sessions use Beijing date, peer number and durable per-chat numbering',async t=>{
   const {bridge,runtime,titles}=setup(t);
   await bridge.handle(route(privateKey),1);await bridge.handle(route(groupKey),1);
-  assert.deepEqual(titles.map(x=>x.title),['2026-10-21-私聊-100000002-1','2026-10-21-群聊-100000003-1']);
+  assert.deepEqual(titles.map(x=>x.title),['2026-10-21-私聊-100000002-默认人格-1','2026-10-21-群聊-100000003-默认人格-1']);
   const before=bridge.state.sessions[bridge.scope(route(groupKey))];
   bridge.memory(groupKey).commit([],{id:'keep-memory',evidenceIds:[],digest:true});
   await bridge.newConversation(groupKey);
-  assert.equal(titles.at(-1).title,'2026-10-21-群聊-100000003-2');
+  assert.equal(titles.at(-1).title,'2026-10-21-群聊-100000003-默认人格-2');
   const restored=new Bridge(runtime,{now:()=>Date.parse('2026-10-21T16:01:00Z')});
   restored.config=bridge.config;restored.status.state='running';restored.dsh=bridge.dsh;
   await restored.newConversation(groupKey);
-  assert.equal(titles.at(-1).title,'2026-10-22-群聊-100000003-3');
+  assert.equal(titles.at(-1).title,'2026-10-22-群聊-100000003-默认人格-3');
   assert.equal(restored.state.sessions[restored.scope(route(groupKey))].workspace,before.workspace);
   assert.ok(restored.memory(groupKey).hasReceipt('keep-memory'));
   assert.equal(restored.state.sessionNaming.counters[privateKey],1);
@@ -54,7 +54,7 @@ test('initial rename failure retries the same session and number after restart, 
   restored.config=bridge.config;restored.generation=1;restored.status.state='running';
   restored.dsh={...bridge.dsh,createSession:async()=>assert.fail('must reuse initial session'),rename:async(id,title)=>titles.push({id,title})};
   await restored.handle(route(groupKey),1);
-  assert.deepEqual(titles,[{id:'session-1',title:'2026-10-21-群聊-100000003-1'}]);assert.equal(prompts,1);
+  assert.deepEqual(titles,[{id:'session-1',title:'2026-10-21-群聊-100000003-默认人格-1'}]);assert.equal(prompts,1);
 });
 
 test('group sweep digests before rotation, obeys per-group disable and waits for buffered group messages',async t=>{
@@ -68,7 +68,7 @@ test('group sweep digests before rotation, obeys per-group disable and waits for
   bridge.ambient.delete(groupKey);await bridge.sweep();
   const fresh=bridge.state.sessions[scope];
   assert.notEqual(fresh.id,old.id);assert.equal(fresh.workspace,old.workspace);
-  assert.equal(titles.at(-1).title,'2026-10-21-群聊-100000003-2');
+  assert.equal(titles.at(-1).title,'2026-10-21-群聊-100000003-默认人格-2');
   assert.equal(fresh.life.compactions.length,0);assert.ok(bridge.memory(groupKey).hasReceipt(old.life.receipt));
   assert.equal(bridge.state.retired.at(-1).id,old.id);
 });

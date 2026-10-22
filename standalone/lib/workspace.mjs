@@ -8,13 +8,14 @@ export function workspacePersonaName(name){
 
 export const beijingDate=now=>new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
 
-// A saved DSH binding survives deletion of its directory. Recreate only our
-// managed directories, at the same path; never restore user-deleted contents.
-export function ensureWorkspaceDirectory(runtime,workspace){
+// Established directories are checked, never resurrected. Only allocation of a
+// fresh workspace may create a directory; user deletion starts a new generation.
+export function ensureWorkspaceDirectory(runtime,workspace,{create=false}={}){
+  let managed=false;
   try{
     if(typeof workspace!=='string'||!path.isAbsolute(workspace))throw Error('工作区路径无效');
     const root=path.resolve(runtime,'workspaces'),target=path.resolve(workspace),relative=path.relative(root,target);
-    const managed=relative!== '..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative);
+    managed=relative!== '..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative);
     if(!managed){
       // Keep existing external bindings compatible, but do not recreate them.
       if(!fs.statSync(target).isDirectory())throw Error('工作区路径不是目录');
@@ -29,29 +30,30 @@ export function ensureWorkspaceDirectory(runtime,workspace){
       }
     };
     check();
-    fs.mkdirSync(target,{recursive:true});
+    if(create)fs.mkdirSync(target,{recursive:true});
+    else if(!fs.statSync(target).isDirectory())throw Error('工作区路径不是目录');
     check();
     return workspace;
   }catch(cause){
-    throw Object.assign(new Error('工作区不可用，未提交模型：'+cause.message,{cause}),{notSubmitted:true});
+    throw Object.assign(new Error('工作区不可用，未提交模型：'+cause.message,{cause}),{notSubmitted:true,workspaceResetRequired:managed&&cause.code==='ENOENT',workspaceMissing:managed&&cause.code==='ENOENT'});
   }
 }
 
-export function workspaceFor(runtime,state,route,scope,now,persist){
+export function workspaceFor(runtime,state,route,scope,now,persist,{fresh=false}={}){
   if(!/^\d{5,20}\/(?:private|group)\/\d{5,20}$/.test(route.key))throw Error('工作区聊天范围无效');
   const mappings=state.workspaces??={};
   const existing=state.sessions[scope]?.workspace??mappings[scope];
-  if(existing)return ensureWorkspaceDirectory(runtime,existing);
+  if(existing&&!fresh){try{return ensureWorkspaceDirectory(runtime,existing);}catch(error){if(!error.workspaceMissing)throw error;fresh=true;}}
   // Preserve legacy directories and their DSH references in place.
   const legacy=path.join(runtime,'workspaces',scope);
-  if(fs.existsSync(legacy)){ensureWorkspaceDirectory(runtime,legacy);mappings[scope]=legacy;persist();return legacy;}
+  if(!fresh&&fs.existsSync(legacy)){ensureWorkspaceDirectory(runtime,legacy);mappings[scope]=legacy;persist();return legacy;}
   const [bot,kind,id]=route.key.split('/');
   const {personaName}=personaIdentity(runtime,route.key,route.personaId);
   const mode=kind==='group'?'群聊':'私聊';
   const parent=path.join(runtime,'workspaces',bot,mode),name=[beijingDate(now),mode,id,workspacePersonaName(personaName)].join('-');
   let dir=path.join(parent,name),number=1;
-  const used=new Set(Object.values(mappings).map(x=>path.resolve(x).toLowerCase()));
-  while(fs.existsSync(dir)||used.has(path.resolve(dir).toLowerCase()))dir=path.join(parent,'重建-'+(++number),name);
-  ensureWorkspaceDirectory(runtime,dir);
+  const used=new Set([...Object.values(mappings),...Object.values(state.sessions??{}).map(s=>s.workspace),...(state.retired??[]).map(s=>s.workspace)].filter(Boolean).map(x=>path.resolve(x).toLowerCase()));
+  while(fs.existsSync(dir)||used.has(path.resolve(dir).toLowerCase()))dir=path.join(parent,name+'-工作区'+(++number));
+  ensureWorkspaceDirectory(runtime,dir,{create:true});
   mappings[scope]=dir;persist();return dir;
 }

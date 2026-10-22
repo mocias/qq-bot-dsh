@@ -49,9 +49,9 @@ flowchart TD
 
 模块通过状态读取函数访问 Bridge 的当前状态，避免记忆重置回滚替换状态对象后仍引用旧对象。队列、准入、取消确认与轮换回执验证仍由 Bridge 负责。
 
-0.25.1 起，`ensureWorkspaceDirectory` 在会话就绪、替换以及普通/维护模型提交前核对工作区。受管目录缺失时按原路径补建空目录，原会话绑定保持不变；缺失的外部目录及被文件、链接占用的受管路径在提交前报错，不恢复用户删除的文件。
+0.25.3 的 `ensureWorkspaceDirectory` 默认只检查目录；只有 `workspaceFor` 分配新路径时允许创建。受管目录缺失后通过持久化 reset journal 分配不同路径并创建新 DSH 会话，旧会话退休且历史保留。缺失的外部目录、被文件或链接占用的受管路径在提交前报错，不擅自新建或恢复。
 
-0.25.2 的 `repairWorkspaceMembership` 在配套插件中以原 Session header 验证工作目录，再恢复注册及成员关系，不创建 Agent。`memory-format.mjs` 只按既有短标题与系统记录修复 summary/date；`MemoryStore.commit` 在 digest 事务中保存修订和格式结果，当前状态的正文保护仍有效。
+0.25.3 的 `repairWorkspaceMembership` 仅以 Session header、目录和权威注册表检查归属，不创建目录、登记或关联。兼容接口名 `qqRsiNative/repairWorkspace` 保留，但缺失状态触发服务新建流程；临时 RPC 失败不触发新建。工作区名为北京日期、聊天类型、对象 QQ、选中人格卡名称，冲突追加工作区序号；会话名另追加持久化会话序号。`memory-format.mjs` 只按既有短标题与系统记录修复 summary/date；`MemoryStore.commit` 在 digest 事务中保存修订和格式结果，当前状态的正文保护仍有效。
 
 ## 修改应落在哪里
 

@@ -104,10 +104,12 @@ export class DshClient {
     if (!session?.sessionId) throw Error('DSH 会话响应格式不兼容');
     return session.sessionId;
   }
-  async ensureWorkspace(sessionId,workspacePath){
+  async ensureWorkspace(sessionId,workspacePath,workspaceId){
     if(!this.config.dshNativeTools)return;
     try{
-      const result=await this.rpc('qqRsiNative/repairWorkspace',{sessionId,workspacePath,version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID});
+      const result=await this.rpc('qqRsiNative/repairWorkspace',{sessionId,workspacePath,workspaceId,action:'inspect',version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID});
+      if(result?.sessionId===sessionId&&['directory-missing','registration-missing','membership-missing','session-missing'].includes(result.status))throw Object.assign(Error('原工作区或会话已删除，需要新建工作区与会话'),{workspaceResetRequired:true});
+      if(result?.status!=='ready')throw Error('DSH工作区检查响应不兼容');
       if(result?.sessionId!==sessionId||!result.workspaceId||typeof result.path!=='string'||!path.isAbsolute(result.path)||path.relative(result.path,workspacePath)!=='')throw Error('DSH工作区恢复响应不兼容');
       return result;
     }catch(error){error.notSubmitted=true;throw error;}

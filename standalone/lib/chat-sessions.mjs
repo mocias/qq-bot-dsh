@@ -1,7 +1,7 @@
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {DEFAULT_PERSONA} from './persona-cards.mjs';
-import {workspaceFor,beijingDate,ensureWorkspaceDirectory} from './workspace.mjs';
+import {DEFAULT_PERSONA,personaIdentity} from './persona-cards.mjs';
+import {workspaceFor,beijingDate,ensureWorkspaceDirectory,workspacePersonaName} from './workspace.mjs';
 import {initializeLife} from './lifecycle.mjs';
 
 const transportFor = config => config.dshNativeTools ? 'native-v1' : 'legacy';
@@ -33,7 +33,8 @@ export class ChatSessions {
       const previous=new Set([...Object.values(this.state.sessions),...this.state.retired]
         .filter(s=>s.route?.key===route.key&&s.id!==id).map(s=>(s.backend??config.dshUrl)+'|'+s.id));
       const number=Math.max(naming.counters[route.key]??0,previous.size)+1;
-      entry={number,title:`${beijingDate(this.now())}-${route.group?'群聊':'私聊'}-${route.id}-${number}`};
+      const {personaName}=personaIdentity(this.runtime,route.key,route.personaId);
+      entry={number,title:`${beijingDate(this.now())}-${route.group?'群聊':'私聊'}-${route.id}-${workspacePersonaName(personaName)}-${number}`};
       naming.counters[route.key]=number;
       naming.names[token]=entry;
     }
@@ -46,8 +47,9 @@ export class ChatSessions {
   async ready(session,{config,dsh,check}) {
     check();
     ensureWorkspaceDirectory(this.runtime,session.workspace);
-    await dsh.ensureWorkspace?.(session.id,session.workspace);
+    const linked=await dsh.ensureWorkspace?.(session.id,session.workspace,session.workspaceId);
     check();
+    if(linked?.workspaceId&&session.workspaceId!==linked.workspaceId){session.workspaceId=linked.workspaceId;this.persist();}
     if(session.permissionPending) {
       await dsh.applyPermission(session.id,session.permissionPreset);
       check();
@@ -64,18 +66,32 @@ export class ChatSessions {
     return session;
   }
 
-  async ensure(route,{scope,config,dsh,check,recoveryReason}) {
+  async ensure(route,{scope,config,dsh,check,recoveryReason,freshWorkspaceReason}) {
     check();
     let session=this.state.sessions[scope];
     const changed=session&&(session.transport??'legacy')!==transportFor(config);
-    if(!session||session.blocked||changed) {
-      const workspace=workspaceFor(this.runtime,this.state,route,scope,this.now(),this.persist);
+    let resetReason=freshWorkspaceReason;
+    if(session&&!resetReason){
+      try{ensureWorkspaceDirectory(this.runtime,session.workspace??path.join(this.runtime,'workspaces',scope));await dsh.ensureWorkspace?.(session.id,session.workspace,session.workspaceId);check();}
+      catch(error){if(!error.workspaceResetRequired)throw error;resetReason='workspace-deleted';}
+    }
+    const resets=this.state.workspaceResets??={};
+    let reset=resets[scope];
+    if(reset&&reset.previousId!==session?.id)reset=null;
+    if(reset?.status==='pending')resetReason=reset.reason;
+    if(!session||session.blocked||changed||resetReason) {
+      if(resetReason&&!reset){reset=resets[scope]={previousId:session?.id,reason:resetReason,status:'pending'};this.persist();}
+      const workspace=reset?.workspace??workspaceFor(this.runtime,this.state,route,scope,this.now(),this.persist,{fresh:!!resetReason});
+      if(reset&&!reset.workspace){reset.workspace=workspace;this.persist();}
+      ensureWorkspaceDirectory(this.runtime,workspace);
       const preset=route.group?config.groupPreset:config.privatePreset;
-      const id=await dsh.createSession(workspace,preset);
+      const id=reset?.newId??await dsh.createSession(workspace,preset);
+      if(reset&&!reset.newId){reset.newId=id;this.persist();}
       check();
       const next=this.record(id,route,workspace,preset,config);
-      if(session)this.state.retired.push({...session,reason:recoveryReason??(changed?'transport-upgrade':'interrupted'),retiredAt:this.now()});
+      if(session)this.state.retired.push({...session,reason:resetReason??recoveryReason??(changed?'transport-upgrade':'interrupted'),retiredAt:this.now()});
       this.state.sessions[scope]=session=next;
+      if(reset)reset.status='complete';
       this.persist();
     }
     // Adopt established records without renaming them or changing permissions.
@@ -89,9 +105,15 @@ export class ChatSessions {
 
   async replace(scope,previous,{config,dsh,isCurrent,reason,journal={}}) {
     if(!isCurrent())return null;
-    ensureWorkspaceDirectory(this.runtime,previous.workspace);
+    if(!journal.newId){
+      try{ensureWorkspaceDirectory(this.runtime,previous.workspace);if(dsh.ensureWorkspace)await dsh.ensureWorkspace(previous.id,previous.workspace,previous.workspaceId);}
+      catch(error){if(!error.workspaceResetRequired)throw error;journal.workspace=workspaceFor(this.runtime,this.state,previous.route,scope,this.now(),this.persist,{fresh:true});}
+    }
+    const workspace=journal.workspace??previous.workspace;
+    if(!isCurrent())return null;
+    ensureWorkspaceDirectory(this.runtime,workspace);
     if(!journal.newId) {
-      journal.newId=await dsh.createSession(previous.workspace,previous.preset);
+      journal.newId=await dsh.createSession(workspace,previous.preset);
       journal.permissionPreset=config.permissionPreset??'';
       this.persist();
     }
@@ -104,7 +126,7 @@ export class ChatSessions {
     if(!isCurrent())return null;
     const name=await this.name(previous.route,journal.newId,config,dsh);
     if(!isCurrent())return null;
-    const next=this.record(journal.newId,{...previous.route,personaId:previous.personaId??DEFAULT_PERSONA},previous.workspace,previous.preset,
+    const next=this.record(journal.newId,{...previous.route,personaId:previous.personaId??DEFAULT_PERSONA},workspace,previous.preset,
       {...config,permissionPreset:journal.permissionPreset});
     Object.assign(next,name,{lastUserAt:previous.lastUserAt});
     delete next.namingPending;

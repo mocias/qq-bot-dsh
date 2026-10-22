@@ -76,7 +76,7 @@ test('rotation survives restart during rename, reuses candidate and retains work
   await assert.rejects(bridge.rotate(scope,s,'digest-proof',0,1,new AbortController().signal));
   assert.equal(bridge.state.sessions[scope].id,'old');assert.equal(bridge.state.rotations.old.newId,'next');
   const restored=new Bridge(runtime,{now:()=>2800000});restored.config=bridge.config;restored.generation=1;
-  restored.dsh={async createSession(){assert.fail('must reuse persisted candidate');},async rename(id,title){assert.equal(id,'next');assert.equal(title,'1970-01-01-私聊-234567-2');}};
+  restored.dsh={async createSession(){assert.fail('must reuse persisted candidate');},async rename(id,title){assert.equal(id,'next');assert.equal(title,'1970-01-01-私聊-234567-默认人格-2');}};
   await restored.rotate(scope,restored.state.sessions[scope],'digest-proof',0,1,new AbortController().signal);
   assert.equal(restored.state.sessions[scope].id,'next');assert.equal(restored.state.sessions[scope].workspace,s.workspace);
   assert.equal(restored.state.retired[0].id,'old');assert.equal(restored.state.rotations.old.status,'complete');assert.equal(creates,1);

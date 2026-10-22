@@ -89,7 +89,7 @@ async function mockDsh(t){
     if(body.method==='agentPresets/list')value={presets:[{id:'safe-chat'},{id:'private'},{id:'safe-group'}]};
     else if(body.method==='workspace/create')value={workspace:{workspaceId:request.path}};
     else if(body.method==='session/create')value={sessionId:'session-'+(++nextSession)};
-    else if(body.method==='session/rename'){assert.match(request.title,/^\d{4}-\d{2}-\d{2}-(私聊|群聊)-\d+-\d+$/);}
+    else if(body.method==='session/rename'){assert.match(request.title,/^\d{4}-\d{2}-\d{2}-(私聊|群聊)-\d+-[^\r\n]+-\d+$/);}
     else if(body.method==='session/prompt'){
       assert.equal(request.mode,'queue');assert.ok(request.requestId);assert.equal(request.content[0].type,'text');
       const follower=followers.get(request.sessionId);assert.ok(follower,'follow snapshot must precede prompt');

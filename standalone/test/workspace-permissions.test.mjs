@@ -23,7 +23,7 @@ test('workspace names use Beijing creation date and peer, persist across dates a
  assert.notEqual(workspaceFor(root,state,group,'group',now,persist),first);
  assert.notEqual(workspaceFor(root,state,other,'bot',now,persist),first);
  const reset=workspaceFor(root,state,route,'reset-scope',now,persist);
- assert.notEqual(reset,first);assert.equal(path.basename(reset),path.basename(first));
+ assert.notEqual(reset,first);assert.notEqual(path.basename(reset),path.basename(first));assert.ok(path.basename(reset).startsWith(path.basename(first)));
  const old=path.join(root,'workspaces','oldhash');fs.mkdirSync(old,{recursive:true});fs.writeFileSync(path.join(old,'keep.txt'),'keep');
  assert.equal(workspaceFor(root,state,route,'oldhash',now,persist),old);assert.equal(fs.readFileSync(path.join(old,'keep.txt'),'utf8'),'keep');
 });

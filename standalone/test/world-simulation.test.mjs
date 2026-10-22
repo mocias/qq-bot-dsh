@@ -82,6 +82,7 @@ function fixture(t){
   const sessions=[true,false].map(group=>{
     const id=group?'100000002':'100000003',route={key:`100000001/${group?'group':'private'}/${id}`,id,group};
     const session={id:group?'group-session':'private-session',route,blocked:false,transport:'native-v1'};
+    session.workspace=path.join(runtime,'workspaces',bridge.scope(route));fs.mkdirSync(session.workspace,{recursive:true});
     initializeLife(session,now);bridge.state.sessions[bridge.scope(route)]=session;
     bridge.state.startups[route.key]={route,phase:'ready',historyThroughSeq:0};return session;
   });

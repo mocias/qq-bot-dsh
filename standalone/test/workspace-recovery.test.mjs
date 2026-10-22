@@ -31,56 +31,58 @@ function removeTree(dir){
   fs.rmdirSync(dir);
 }
 
-test('a deleted mapped workspace is recreated at its original path without restoring deleted files',t=>{
+test('a deleted mapped workspace allocates a different path without restoring deleted files',t=>{
   const {runtime}=setup(t),workspace=path.join(runtime,'workspaces','legacy-scope');
   fs.mkdirSync(workspace,{recursive:true});fs.writeFileSync(path.join(workspace,'deleted.txt'),'user deleted this');
   const state={sessions:{},workspaces:{scope:workspace}};
   removeTree(workspace);
-  assert.equal(workspaceFor(runtime,state,route,'scope',Date.now(),()=>assert.fail('mapping must stay unchanged')),workspace);
-  assert.deepEqual(fs.readdirSync(workspace),[]);
+  const fresh=workspaceFor(runtime,state,route,'scope',Date.now(),()=>{});
+  assert.notEqual(fresh,workspace);assert.equal(fs.existsSync(workspace),false);assert.deepEqual(fs.readdirSync(fresh),[]);
 });
 
-test('startup and the next message reuse the same session after its workspace was deleted',async t=>{
+test('startup and the next message create fresh sessions when their directories were deleted',async t=>{
   const {bridge,runtime,counts}=setup(t);
   await bridge.handle(route,0);
   const scope=bridge.scope(route),session=bridge.state.sessions[scope],workspace=session.workspace;
   bridge.memory(key).commit([],{id:'keep-receipt',evidenceIds:[],digest:true});
   removeTree(path.join(runtime,'workspaces'));
-  assert.equal((await bridge.ensureStartupSession(route)).id,session.id);
-  assert.ok(fs.statSync(workspace).isDirectory());
-  removeTree(workspace);
-  bridge.dsh.prompt=async id=>{assert.equal(id,session.id);assert.ok(fs.statSync(workspace).isDirectory());return '{"reply":"","memory":[]}';};
+  const second=await bridge.ensureStartupSession(route);
+  assert.notEqual(second.id,session.id);assert.equal(fs.existsSync(workspace),false);
+  removeTree(second.workspace);
+  bridge.dsh.prompt=async id=>{assert.notEqual(id,second.id);assert.ok(fs.statSync(bridge.state.sessions[scope].workspace).isDirectory());return '{"reply":"","memory":[]}';};
   await bridge.handle({...route,messageId:'input-2'},0);
-  assert.equal(bridge.state.sessions[scope].id,session.id);
-  assert.equal(counts().created,1);
+  assert.notEqual(bridge.state.sessions[scope].id,session.id);
+  assert.equal(counts().created,3);
   assert.ok(bridge.memory(key).hasReceipt('keep-receipt'));
 });
 
-test('maintenance repairs a directory deleted after the session became ready before submitting',async t=>{
+test('maintenance refuses to resurrect a directory deleted after the session became ready',async t=>{
   const {bridge}=setup(t);await bridge.handle(route,0);
   const session=bridge.state.sessions[bridge.scope(route)];
   removeTree(session.workspace);
   assert.equal(fs.existsSync(session.workspace),false);
-  bridge.dsh.prompt=async id=>{assert.equal(id,session.id);assert.ok(fs.statSync(session.workspace).isDirectory());return 'ok';};
-  assert.equal(await bridge.maintenanceDsh(session).prompt(session.id,'test',{signal:new AbortController().signal}),'ok');
+  bridge.dsh.prompt=async()=>assert.fail('deleted workspace must not receive another prompt');
+  await assert.rejects(bridge.maintenanceDsh(session).prompt(session.id,'test',{signal:new AbortController().signal}),e=>e.workspaceResetRequired&&e.notSubmitted);
+  assert.equal(fs.existsSync(session.workspace),false);
 });
 
-test('ordinary submission repairs deletion during message preparation',async t=>{
+test('ordinary submission retains input when deletion happens during message preparation',async t=>{
   const {bridge}=setup(t);await bridge.handle(route,0);
   const session=bridge.state.sessions[bridge.scope(route)],prepare=bridge.prepareMessages.bind(bridge);
   bridge.prepareMessages=async(...args)=>{const result=await prepare(...args);removeTree(session.workspace);return result;};
-  bridge.dsh.prompt=async id=>{assert.equal(id,session.id);assert.ok(fs.statSync(session.workspace).isDirectory());return '{"reply":"","memory":[]}';};
-  await bridge.handle({...route,messageId:'input-2'},0);
+  bridge.dsh.prompt=async()=>assert.fail('deleted workspace must not receive a prompt');
+  await assert.rejects(bridge.handle({...route,messageId:'input-2'},0),e=>e.workspaceResetRequired&&e.notSubmitted);
   assert.equal(session.blocked,false);
+  assert.equal(fs.existsSync(session.workspace),false);assert.ok(bridge.hasDeferred(route.key));
 });
 
-test('manual replacement repairs the same directory before creating the replacement session',async t=>{
+test('manual replacement allocates a new directory if the previous one was deleted',async t=>{
   const {bridge,counts}=setup(t);await bridge.handle(route,0);
   const scope=bridge.scope(route),old=bridge.state.sessions[scope];
   removeTree(old.workspace);
   assert.equal(fs.existsSync(old.workspace),false);
   await bridge.newConversation(key);
-  assert.equal(bridge.state.sessions[scope].workspace,old.workspace);
+  assert.notEqual(bridge.state.sessions[scope].workspace,old.workspace);assert.equal(fs.existsSync(old.workspace),false);
   assert.equal(counts().created,2);
 });
 

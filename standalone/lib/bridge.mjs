@@ -137,7 +137,7 @@ export class Bridge {
       if(id!==session.id)throw Error('记忆整合必须使用当前聊天会话');
       if(options.signal?.aborted||!this.enabled(session.route))throw Object.assign(Error('整理已停止'),{cancelled:true,acknowledged:true});
       ensureWorkspaceDirectory(this.runtime,session.workspace);
-      await this.dsh.ensureWorkspace?.(session.id,session.workspace);
+      await this.dsh.ensureWorkspace?.(session.id,session.workspace,session.workspaceId);
       if(options.signal?.aborted||!this.enabled(session.route))throw Object.assign(Error('整理已停止'),{cancelled:true,acknowledged:true});
       // Startup and idle maintenance already own this chat's serial queue.
       // Tool scopes change between phases; the conversation identity does not.
@@ -706,7 +706,7 @@ export class Bridge {
       for(let round=0;round<5;round++){
         if(controller.signal.aborted||generation!==this.generation)return;
         ensureWorkspaceDirectory(this.runtime,session.workspace);
-        await dsh.ensureWorkspace?.(session.id,session.workspace);
+        await dsh.ensureWorkspace?.(session.id,session.workspace,session.workspaceId);
         if(controller.signal.aborted||generation!==this.generation)return;
         modelPending=true;
         if(job.continuous)this.simulationClock(session).delivered();

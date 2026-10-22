@@ -29,7 +29,7 @@ export class NativeRuntime{
   }
   probe(request){
     this.scheduleRouter.refresh();
-    const status={version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID,active:this.bindings.size,scheduledWakeRouter:!!this.scheduleRouter.root,workspaceRepair:true};
+    const status={version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID,active:this.bindings.size,scheduledWakeRouter:!!this.scheduleRouter.root,workspaceRepair:true,workspaceDeletionPolicy:'fresh-session'};
     if(typeof request?.sessionId==='string'){
       const agent=this.ctx.agents.get(request.sessionId);
       const engine=agent&&this.ctx.agentPresets?.serviceFor(agent,'compaction');

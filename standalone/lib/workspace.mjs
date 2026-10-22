@@ -47,10 +47,11 @@ export function workspaceFor(runtime,state,route,scope,now,persist,{fresh=false}
   // Preserve legacy directories and their DSH references in place.
   const legacy=path.join(runtime,'workspaces',scope);
   if(!fresh&&fs.existsSync(legacy)){ensureWorkspaceDirectory(runtime,legacy);mappings[scope]=legacy;persist();return legacy;}
-  const [bot,kind,id]=route.key.split('/');
+  const [bot]=route.key.split('/');
   const {personaName}=personaIdentity(runtime,route.key,route.personaId);
-  const mode=kind==='group'?'群聊':'私聊';
-  const parent=path.join(runtime,'workspaces',bot,mode),name=[beijingDate(now),mode,id,workspacePersonaName(personaName)].join('-');
+  // The workspace name carries only the creation date and the persona. Chat type
+  // and peer stay on the DSH session title inside it, so the folder stays readable.
+  const parent=path.join(runtime,'workspaces',bot),name=[beijingDate(now),workspacePersonaName(personaName)].join('-');
   let dir=path.join(parent,name),number=1;
   const used=new Set([...Object.values(mappings),...Object.values(state.sessions??{}).map(s=>s.workspace),...(state.retired??[]).map(s=>s.workspace)].filter(Boolean).map(x=>path.resolve(x).toLowerCase()));
   while(fs.existsSync(dir)||used.has(path.resolve(dir).toLowerCase()))dir=path.join(parent,name+'-工作区'+(++number));

@@ -87,17 +87,17 @@ test('scene defaults, scene edits and persona overrides stay isolated through na
   assert.match(tools.description,/省略replyToMessageId/);
 });
 
-test('new workspace names include mode and explicit persona name; collisions and old paths remain isolated',t=>{
+test('new workspace names carry only date and explicit persona name; collisions and old paths remain isolated',t=>{
   const root=temp(t),cards=new PersonaCards(root),state={sessions:{}},now=Date.parse('2026-10-20T16:00:00Z'),persist=()=>{};
   cards.rename({key,personaId:'default',name:'知遥',revision:0});
   const a=cards.create({key,name:'小夏/研究员',revision:1});
   const first=workspaceFor(root,state,{key,personaId:a.id},'a',now,persist);
-  assert.equal(path.basename(first),'2026-10-21-群聊-100000002-小夏_研究员');
+  assert.equal(path.basename(first),'2026-10-21-小夏_研究员');
   const b=cards.create({key,name:'小夏\\研究员',revision:2});
   const other=workspaceFor(root,state,{key,personaId:b.id},'b',now,persist);assert.notEqual(first,other);
   cards.rename({key,personaId:a.id,name:'新名字',revision:3});
   assert.equal(workspaceFor(root,state,{key,personaId:a.id},'a',now,persist),first);
-  assert.match(path.basename(workspaceFor(root,state,{key},'default',now,persist)),/群聊-100000002-知遥$/);
+  assert.match(path.basename(workspaceFor(root,state,{key},'default',now,persist)),/^2026-10-21-知遥$/);
   const old=path.join(root,'old-directory');fs.mkdirSync(old);state.sessions.old={workspace:old};
   assert.equal(workspaceFor(root,state,{key},'old',now,persist),old);
 });

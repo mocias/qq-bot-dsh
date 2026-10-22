@@ -11,8 +11,9 @@ import {pageAttribution,attributionPattern} from './message-snapshot.mjs';
 import {activePage,pageState,setMetadata} from './memory-state.mjs';
 import {compileMemoryIndex} from './memory-index.mjs';
 import {planIndex,clampSummary} from './legacy-memory/index-page.js';
+import {repairMemoryMetadata} from './memory-format.mjs';
 
-export const MAINTENANCE_GUIDE='记忆维护：先 qq_memory_diagnose 查版本、严格校验、冷页与重复候选，再 qq_memory_read inspect:true 阅读全文。qq_memory_maintain {operations:[{action:"downgrade|archive|restore|merge|consolidate|sync_index|sync_summaries|edit_index",page:"页路径",reason:"判断依据"}],expectedRevision:"诊断版本",preview:true} 预览；正常回合 preview:false 保存，后台仅预览后用 qq_memory_digest.maintenance 一次提交。按原版由模型判断降级和归档：温记忆超过180天未访问建议降为冷，冷记忆超过90天建议归档，热记忆通常保留；这些是建议，不是代码时间门槛。downgrade 将1降到2、2降到3；archive 可归档过时或不再重要的活动页，须说明具体依据。代码仍保护聊天隔离、整库版本、人物归属和原文。归档原路径保留，可 includeArchived:true 查阅或 restore。merge 指定目标 page、sources；不传 claims 时无损拼接；传 claims:[{text:"精简后的陈述",evidence:[{page:"参与合并的页",quote:"逐字原文"}]} 可语义精简，consolidate 同格式整理单页。每页必须有引用，保留时间条件、否定、冲突与转述身份，不能把转述升级为本人确认或捏造新事实。原文匹配不能证明改写语义正确，模型须逐项核对。修订保留所有旧全文。edit_index 传 index 完整Markdown，可调整分区、顺序和移除失效路由；行摘要仍从页面派生，漏列页会补入新记忆分区。sync_summaries 从现有索引摘要回填缺失的 frontmatter summary，sync_index 同步路由。新增事实仍经 qq_memory_update 的当前消息来源校验。';
+export const MAINTENANCE_GUIDE='记忆维护：先 qq_memory_diagnose 查版本、严格校验、冷页与重复候选，再 qq_memory_read inspect:true 阅读全文。qq_memory_maintain {operations:[{action:"downgrade|archive|restore|merge|consolidate|sync_index|sync_summaries|edit_index|repair_metadata",page:"页路径",reason:"判断依据"}],expectedRevision:"诊断版本",preview:true} 预览；正常回合 preview:false 保存，后台仅预览后用 qq_memory_digest.maintenance 一次提交。按原版由模型判断降级和归档：温记忆超过180天未访问建议降为冷，冷记忆超过90天建议归档，热记忆通常保留；这些是建议，不是代码时间门槛。downgrade 将1降到2、2降到3；archive 可归档过时或不再重要的活动页，须说明具体依据。代码仍保护聊天隔离、整库版本、人物归属和原文。归档原路径保留，可 includeArchived:true 查阅或 restore。merge 指定目标 page、sources；不传 claims 时无损拼接；传 claims:[{text:"精简后的陈述",evidence:[{page:"参与合并的页",quote:"逐字原文"}]} 可语义精简，consolidate 同格式整理单页。每页必须有引用，保留时间条件、否定、冲突与转述身份，不能把转述升级为本人确认或捏造新事实。原文匹配不能证明改写语义正确，模型须逐项核对。修订保留所有旧全文。edit_index 传 index 完整Markdown，可调整分区、顺序和移除失效路由；行摘要仍从页面派生，漏列页会补入新记忆分区。sync_summaries 从现有索引摘要回填缺失的 frontmatter summary，sync_index 同步路由。repair_metadata 只按已有完整短标题与系统推演时间修复 summary/date，正文、人物来源及经历不变；不确定项保留待办。最终 digest 即使 updates 为空也检查并修复这类格式，结果见 formatRepair。新增事实仍经 qq_memory_update 的当前消息来源校验。';
 const readIndex=store=>fs.readFileSync(store.safe('index.md'),'utf8');
 export function maintenanceRevision(store){
   return revisionOf(JSON.stringify([store.key,readIndex(store),store.pages().map(p=>[p.name,p.text])]));
@@ -75,7 +76,7 @@ export function planMaintenance(store,request,pages=new Map(store.pages().map(p=
   let index=readIndex(store);
   const requirePage=name=>{if(typeof name!=='string'||!memoryPagePattern.test(name)||!pages.has(name))throw Error('维护页面不在当前记忆库');return pages.get(name);};
   for(const op of request.operations){
-    if(!op||Object.keys(op).some(k=>!['action','page','sources','reason','claims','index'].includes(k))||!['downgrade','archive','restore','merge','consolidate','sync_index','sync_summaries','edit_index'].includes(op.action)||typeof op.reason!=='string'||!op.reason.trim()||op.reason.length>400)throw Error('维护操作需要有效类型及依据');
+    if(!op||Object.keys(op).some(k=>!['action','page','sources','reason','claims','index'].includes(k))||!['downgrade','archive','restore','merge','consolidate','sync_index','sync_summaries','edit_index','repair_metadata'].includes(op.action)||typeof op.reason!=='string'||!op.reason.trim()||op.reason.length>400)throw Error('维护操作需要有效类型及依据');
     if(op.claims!==undefined&&!['merge','consolidate'].includes(op.action))throw Error('只有语义整理接受 claims');
     if(op.index!==undefined&&op.action!=='edit_index')throw Error('只有编辑索引接受 index');
     if(['sync_index','sync_summaries','edit_index'].includes(op.action)){
@@ -94,7 +95,11 @@ export function planMaintenance(store,request,pages=new Map(store.pages().map(p=
       pages.set(op.page,setMetadata(text,{qq_memory_state:null,qq_merged_into:null}));
     }else{
       if(status.state!=='active')throw Error('请先恢复已归档或合并页面');
-      if(op.action==='downgrade'){
+      if(op.action==='repair_metadata'){
+        const repaired=repairMemoryMetadata(op.page,text);
+        pages.set(op.page,repaired.text);
+        changes.push({...op,fields:Object.keys(repaired.fields),pending:repaired.pending});continue;
+      }else if(op.action==='downgrade'){
         if(![1,2].includes(Number(fm.salience)))throw Error('仅可将热记忆降为温、温记忆降为冷');
         pages.set(op.page,setMetadata(text,{salience:Number(fm.salience)+1}));
       }else if(op.action==='archive'){

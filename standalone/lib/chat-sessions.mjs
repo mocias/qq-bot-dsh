@@ -1,7 +1,7 @@
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {DEFAULT_PERSONA} from './persona-cards.mjs';
-import {workspaceFor,beijingDate} from './workspace.mjs';
+import {workspaceFor,beijingDate,ensureWorkspaceDirectory} from './workspace.mjs';
 import {initializeLife} from './lifecycle.mjs';
 
 const transportFor = config => config.dshNativeTools ? 'native-v1' : 'legacy';
@@ -45,6 +45,9 @@ export class ChatSessions {
 
   async ready(session,{config,dsh,check}) {
     check();
+    ensureWorkspaceDirectory(this.runtime,session.workspace);
+    await dsh.ensureWorkspace?.(session.id,session.workspace);
+    check();
     if(session.permissionPending) {
       await dsh.applyPermission(session.id,session.permissionPreset);
       check();
@@ -86,6 +89,7 @@ export class ChatSessions {
 
   async replace(scope,previous,{config,dsh,isCurrent,reason,journal={}}) {
     if(!isCurrent())return null;
+    ensureWorkspaceDirectory(this.runtime,previous.workspace);
     if(!journal.newId) {
       journal.newId=await dsh.createSession(previous.workspace,previous.preset);
       journal.permissionPreset=config.permissionPreset??'';

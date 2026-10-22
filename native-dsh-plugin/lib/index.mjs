@@ -7,7 +7,7 @@ import {defineTool} from '@deepseek-ai/dsh-tools';
 // Stable entry point. The manifest is selected by the same release operation
 // as the standalone service, not by requests or model arguments.
 export default class QQRSINative extends TypertRemoteService{
-  static inject=['agents','tools','sessionController','attachments','systemPrompt','skills','agentPresets'];
+  static inject=['agents','tools','sessionController','attachments','systemPrompt','skills','agentPresets','workspaceRegistry','sessionPersistence'];
   constructor(ctx,config={}){
     super(ctx,'qqRsiNative');this.owner=ctx;this.manifest=config.releaseManifest;
     this.loading=Promise.resolve();this.runtime=null;this.entry=null;
@@ -31,9 +31,10 @@ export default class QQRSINative extends TypertRemoteService{
   }
   async probe(request){return (await this.current()).probe(request);}
   async submit(request){return (await this.current()).submit(request);}
+  async repairWorkspace(request){return (await this.current()).repairWorkspace(request);}
   async release(request){return this.runtime?.release(request)??{released:true};}
 }
-for(const name of ['probe','submit','release']){
+for(const name of ['probe','submit','release','repairWorkspace']){
   const initializers=[];Remote(name)(undefined,{name,private:false,static:false,addInitializer(fn){initializers.push(fn);}});
   const receiver=Object.create(QQRSINative.prototype);for(const fn of initializers)fn.call(receiver);
 }

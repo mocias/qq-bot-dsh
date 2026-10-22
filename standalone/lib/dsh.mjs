@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import WebSocket from 'ws';
 import { localSessionCookie } from './local-dsh-auth.mjs';
 import {nativeCallback} from './native-callback.mjs';
@@ -102,6 +103,14 @@ export class DshClient {
     const session = await this.rpc('session/create', { workspaceId: workspace.workspace.workspaceId, agentPreset: preset });
     if (!session?.sessionId) throw Error('DSH 会话响应格式不兼容');
     return session.sessionId;
+  }
+  async ensureWorkspace(sessionId,workspacePath){
+    if(!this.config.dshNativeTools)return;
+    try{
+      const result=await this.rpc('qqRsiNative/repairWorkspace',{sessionId,workspacePath,version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID});
+      if(result?.sessionId!==sessionId||!result.workspaceId||typeof result.path!=='string'||!path.isAbsolute(result.path)||path.relative(result.path,workspacePath)!=='')throw Error('DSH工作区恢复响应不兼容');
+      return result;
+    }catch(error){error.notSubmitted=true;throw error;}
   }
   canSteer(sessionId) { return this.runs.get(sessionId)?.accepting === true; }
   awaitingChild(sessionId){return this.runs.get(sessionId)?.awaitingChild?.()===true;}

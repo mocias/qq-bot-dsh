@@ -5,6 +5,7 @@ import path from 'node:path';
 import {Continuations,CONTINUOUS_TOOL_TIMEOUT_MS,isHostContext} from './continuations.mjs';
 import {hookCompaction,saveHandoff} from './handoff.mjs';
 import {ScheduleWakeRouter} from './scheduled-wake.mjs';
+import {repairWorkspaceMembership} from './workspace-link.mjs';
 export const RUN_LEASE_MS=240000;
 const terminal=name=>/^qq_(send_message|reply|send_media|send_poke|send_sticker|group_send_image|no_reply)$/.test(name);
 const unsentReplyInstruction=binding=>promptText(binding,'runtime.unsent');
@@ -28,7 +29,7 @@ export class NativeRuntime{
   }
   probe(request){
     this.scheduleRouter.refresh();
-    const status={version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID,active:this.bindings.size,scheduledWakeRouter:!!this.scheduleRouter.root};
+    const status={version:VERSION,protocol:PROTOCOL,buildId:BUILD_ID,active:this.bindings.size,scheduledWakeRouter:!!this.scheduleRouter.root,workspaceRepair:true};
     if(typeof request?.sessionId==='string'){
       const agent=this.ctx.agents.get(request.sessionId);
       const engine=agent&&this.ctx.agentPresets?.serviceFor(agent,'compaction');
@@ -36,6 +37,7 @@ export class NativeRuntime{
     }
     return status;
   }
+  async repairWorkspace(request){return repairWorkspaceMembership(this.ctx,this.scheduleRouter.root,request);}
   async submit(request){
     let dispatchStarted=false;
     try{return await this.admit(request,()=>{dispatchStarted=true;});}

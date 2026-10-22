@@ -71,7 +71,7 @@ test('new workspace names include mode and explicit persona name; collisions and
   cards.rename({key,personaId:a.id,name:'新名字',revision:3});
   assert.equal(workspaceFor(root,state,{key,personaId:a.id},'a',now,persist),first);
   assert.match(path.basename(workspaceFor(root,state,{key},'default',now,persist)),/群聊-100000002-知遥$/);
-  const old=path.join(root,'old-directory');state.sessions.old={workspace:old};
+  const old=path.join(root,'old-directory');fs.mkdirSync(old);state.sessions.old={workspace:old};
   assert.equal(workspaceFor(root,state,{key},'old',now,persist),old);
 });
 

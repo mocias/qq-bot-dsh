@@ -17,6 +17,7 @@ import {personaGuide} from './persona.mjs';
 import {compileMemoryIndex,activeIndexProjection} from './memory-index.mjs';
 import {planMaintenance} from './memory-maintenance.mjs';
 import {activePage} from './memory-state.mjs';
+import {repairMemoryMetadata} from './memory-format.mjs';
 
 export const scopeOf = key => createHash('sha256').update(key).digest('hex');
 const allowedPage = memoryPagePattern;
@@ -126,7 +127,11 @@ export class MemoryStore {
     const evidence=new Set(evidenceIds), files=[],before=[];
     // Plan against the original snapshot before any changes or access stamps.
     const maintenancePlan=maintenance?planMaintenance(this,maintenance):null;
-    if(maintenancePlan?.files.some(f=>f.name==='concepts/character-state.md'))throw Error('当前人格状态由角色推演工具维护，不可归档或合并；历史经历可整理');
+    const roleFile=maintenancePlan?.files.find(f=>f.name==='concepts/character-state.md');
+    if(roleFile){
+      const original=maintenancePlan.before.find(p=>p.page===roleFile.name).text;
+      if(!maintenance.operations.some(op=>op.page===roleFile.name&&op.action==='repair_metadata')||roleFile.text!==repairMemoryMetadata(roleFile.name,original).text)throw Error('当前人格状态由角色推演工具维护，不可归档或合并；仅允许受控元数据修复');
+    }
     for(const patch of updates){
       if(!patch||!allowedPage.test(patch.page)||!['write','forget'].includes(patch.action)||typeof patch.text!=='string'||patch.text.length>20000||!patch.reason?.trim()||patch.reason.length>400)throw Error('记忆更新格式不正确');
       if(this.key.includes('/group/')&&patch.page.startsWith('identity/'))throw Error('群聊不能修改基础身份');
@@ -142,7 +147,7 @@ export class MemoryStore {
       let text=patch.action==='forget'?`# 已忘记\n\n此页面已按用户要求从主动记忆中移除。\n`:patch.text.replace(attributionPattern,'').trim();
       if(patch.action==='write'&&!text.startsWith('---')){
         const date=new Date().toISOString().slice(0,10),title=text.match(/^#\s+(.+)$/m)?.[1]??patch.page;
-        text=`---\ntitle: ${title}\ndate: ${date}\ntype: ${patch.page.split('/')[0]}\nsummary: ${JSON.stringify(title.slice(0,80))}\nsalience: 2\nlast_access: ${date}\n---\n\n${text}`;
+        text=`---\ntitle: ${title}\ndate: ${date}\ntype: ${patch.page.split('/')[0]}\nsummary: ${JSON.stringify(title.length<=46?title:'记忆页面详情')}\nsalience: 2\nlast_access: ${date}\n---\n\n${text}`;
       }
       if(patch.action==='write'&&text.startsWith('---')){
         const end=text.indexOf('\n---',3);
@@ -157,14 +162,27 @@ export class MemoryStore {
     }
     if(maintenancePlan){files.push(...maintenancePlan.files);before.push(...maintenancePlan.before);}
     const all=new Map(this.pages().map(p=>[p.name,p.text]));for(const file of files)all.set(file.name,file.text);
+    const formatRepair={fixed:[],pending:[]};
+    if(digest){
+      for(const [name,original] of all){
+        if(this.key.includes('/group/')&&name.startsWith('identity/'))continue;
+        const repaired=repairMemoryMetadata(name,original);formatRepair.pending.push(...repaired.pending);
+        if(repaired.text===original)continue;
+        formatRepair.fixed.push({page:name,fields:Object.keys(repaired.fields)});
+        const staged=files.find(f=>f.name===name);
+        if(staged)staged.text=repaired.text;
+        else{files.push({name,text:repaired.text});before.push({page:name,text:original});}
+        all.set(name,repaired.text);
+      }
+    }
     const index=compileMemoryIndex(maintenancePlan?.index??fs.readFileSync(this.safe('index.md'),'utf8'),all);
     const now=Date.now(),log=this.safe('log.md');
-    const next={...this.state,receipts:[...this.state.receipts,id],completed:this.state.completed+(digest?1:0),lastDigest:digest?now:this.state.lastDigest};
+    const next={...this.state,receipts:[...this.state.receipts,id],completed:this.state.completed+(digest?1:0),lastDigest:digest?now:this.state.lastDigest,...(digest?{formatRepair:{id,...formatRepair}}:{})};
     files.push({name:'index.md',text:index},{name:'log.md',text:(fs.existsSync(log)?fs.readFileSync(log,'utf8'):'')+`\n## [${new Date(now).toISOString().slice(0,10)}] ${digest?'digest':'remember'} | ${bound(summary,500)||'无新增或已检查'}\n来源：${JSON.stringify([...evidence])}\n<!-- ${id} -->\n`},
-      {name:'.runtime/revisions/'+randomUUID()+'.json',text:JSON.stringify({id,at:now,before:[{page:'index.md',text:fs.readFileSync(this.safe('index.md'),'utf8')},...before],updates,maintenance:maintenancePlan?{expectedRevision:maintenance.expectedRevision,operations:maintenancePlan.changes}:undefined})},
+      {name:'.runtime/revisions/'+randomUUID()+'.json',text:JSON.stringify({id,at:now,before:[{page:'index.md',text:fs.readFileSync(this.safe('index.md'),'utf8')},...before],updates,formatRepair:digest?formatRepair:undefined,maintenance:maintenancePlan?{expectedRevision:maintenance.expectedRevision,operations:maintenancePlan.changes}:undefined})},
       {name:'.runtime/store.json',text:JSON.stringify(next)});
     if(roleStateRecord)files.push({name:'.runtime/role-state.json',text:JSON.stringify(roleStateRecord)});
-    if(updates.length||maintenance)snapshotHistory(this); // Preserve the pre-migration baseline before the first edit.
+    if(updates.length||maintenance||formatRepair.fixed.length)snapshotHistory(this); // Preserve the pre-migration baseline before the first edit.
     writeJson(this.txFile,{key:this.key,files});this.recover();this.state=next;
     snapshotHistory(this);return true;
   }

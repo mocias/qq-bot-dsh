@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import {MAX_WAIT_SECONDS} from './continuations.mjs';
 // Shared by the adapter and host. No model-provided recipient or callback address.
-export const VERSION='0.25.0';
+export const VERSION='0.25.2';
 export const PROTOCOL=1;
 export const BUILD_ID=(()=>{
   try{return JSON.parse(fs.readFileSync(new URL('../../release.json',import.meta.url))).buildId??'development';}
@@ -13,7 +13,7 @@ const list=()=>({type:'array',items:{type:'string'}});
 const choice=(values,required=true)=>({type:'string',enum:values,...(required?{required:true}:{})});
 const tool=(name,description,parameters)=>({name,description,parameters});
 const subjects={type:'array',items:{type:'object',properties:{qq:string('人物代号U或QQ',true),basis:choice(['self','reported','bot']),evidence:{...list(),required:true}},additionalProperties:false},description:'write 必填：人物归属与来源；非人物事实用空数组。本人自述 self，他人转述 reported，机器人 bot。'};
-const maintenanceProperties={operations:{type:'array',required:true,items:{type:'object',properties:{action:choice(['downgrade','archive','restore','merge','consolidate','sync_index','sync_summaries','edit_index']),page:string('当前库目标页；sync_index省略'),sources:list(),index:string('edit_index的完整索引Markdown'),claims:{type:'array',items:{type:'object',properties:{text:string('保留原意的精简陈述',true),evidence:{type:'array',required:true,items:{type:'object',properties:{page:string('参与整理的页',true),quote:string('逐字原文依据',true)},additionalProperties:false}}},additionalProperties:false}},reason:string('操作依据',true)},additionalProperties:false}},expectedRevision:string('诊断返回的整库版本；变化须重新诊断',true)};
+const maintenanceProperties={operations:{type:'array',required:true,items:{type:'object',properties:{action:choice(['downgrade','archive','restore','merge','consolidate','sync_index','sync_summaries','edit_index','repair_metadata']),page:string('当前库目标页；sync_index省略'),sources:list(),index:string('edit_index的完整索引Markdown'),claims:{type:'array',items:{type:'object',properties:{text:string('保留原意的精简陈述',true),evidence:{type:'array',required:true,items:{type:'object',properties:{page:string('参与整理的页',true),quote:string('逐字原文依据',true)},additionalProperties:false}}},additionalProperties:false}},reason:string('操作依据',true)},additionalProperties:false}},expectedRevision:string('诊断返回的整库版本；变化须重新诊断',true)};
 export const DEFINITIONS=[
   tool('qq_role_state_update','保存本次角色推演。必须使用宿主给出的simulationId，填写五项简明状态，不提交隐含思考。作为当前人格正式经历写入长期记忆与时间日志，不向QQ发送。不能创造其他人的事实或假冒现实工具执行。保存成功后继续等待。',{simulationId:string('本次推演id',true),activity:string('当前活动',true),mood:string('当前情绪',true),attention:string('注意力所在',true),progress:string('此前事情的进展，未变化可明确说明',true),nextIntent:string('接下来打算',true)}),
   tool('qq_handoff','当前聊天独立交接。action=create显式保存完整公开对话、实际工具动作和回执，并填写详细summary及unfinished（未完成事项、当前状态、下一步，已完成不要混入）。不压缩、不换会话、不发QQ。下一次qq_wait_for_messages先返回交接再接收新消息。action=read读取已保存交接，section=overview/dialogue/events/unfinished；长内容按nextOffset分页。普通等待不自动创建交接，自动交接仅在上下文压缩时发生。',{action:choice(['create','read']),summary:string('create必填：详细话题脉络、人物关系、最近对话、已做/未做、当前角色状态；不要保存隐含思考'),unfinished:list(),id:string('read可选：交接编号，默认最近一次'),section:choice(['overview','dialogue','events','unfinished'],false),offset:number()}),

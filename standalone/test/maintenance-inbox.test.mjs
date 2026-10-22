@@ -15,7 +15,7 @@ function fixture(t,group=true){
     privatePreset:'test',groupPreset:'test',groupAmbientEnabled:true,groupAmbientMinSeconds:0,memoryIdleSeconds:1,memoryMinTurns:1,dshNativeTools:true};
   bridge.status={state:'running',active:0,channels:{private:true,group:true}};bridge.generation=1;
   const key=`100000001/${group?'group':'private'}/100000002`;
-  const session={id:'existing',route:{key,id:'100000002',group},blocked:false};initializeLife(session,0);
+  const session={id:'existing',route:{key,id:'100000002',group},workspace:path.join(runtime,'workspaces','existing'),blocked:false};initializeLife(session,0);
   session.life.conversation=[{inputs:[{messageId:'old-input'}],reply:'old reply'}];
   bridge.state.sessions[bridge.scope(session.route)]=session;
   const processed=[];bridge.handle=async route=>{processed.push(route);};

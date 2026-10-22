@@ -72,6 +72,7 @@ async function harness(t,respond){
       const args=request.payload.args.request;
       if(request.method==='agentPresets/list')result=['test'];
       else if(request.method==='qqRsiNative/probe')result=runtime.probe();
+      else if(request.method==='qqRsiNative/repairWorkspace')result={sessionId:args.sessionId,workspaceId:'test-workspace',path:args.workspacePath};
       else if(request.method==='qqRsiNative/submit')result=await runtime.submit(args);
       else if(request.method==='qqRsiNative/release')result=runtime.release(args);
       else if(request.method==='session/cancel'){agent.status='idle';emit('turn/end',{turn,reason:{kind:'cancelled'}});result={accepted:true};}

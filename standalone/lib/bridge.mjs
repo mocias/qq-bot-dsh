@@ -13,6 +13,7 @@ import { DshClient,presetIds } from './dsh.mjs';
 import { readJson, writeJson, defaults } from './config.mjs';
 import { MemoryStore, decodeReply, preparePrompt, automaticMemoryRules } from './memory.mjs';
 import {ChatSessions} from './chat-sessions.mjs';
+import {ensureWorkspaceDirectory} from './workspace.mjs';
 import { initializeLife, noteArrival, observeCompaction, maintain, due } from './lifecycle.mjs';
 import { verifyQQ } from './onebot.mjs';
 import { Media } from './media.mjs';
@@ -134,6 +135,9 @@ export class Bridge {
   maintenanceDsh(session){
     return {prompt:async(id,text,options)=>{
       if(id!==session.id)throw Error('记忆整合必须使用当前聊天会话');
+      if(options.signal?.aborted||!this.enabled(session.route))throw Object.assign(Error('整理已停止'),{cancelled:true,acknowledged:true});
+      ensureWorkspaceDirectory(this.runtime,session.workspace);
+      await this.dsh.ensureWorkspace?.(session.id,session.workspace);
       if(options.signal?.aborted||!this.enabled(session.route))throw Object.assign(Error('整理已停止'),{cancelled:true,acknowledged:true});
       // Startup and idle maintenance already own this chat's serial queue.
       // Tool scopes change between phases; the conversation identity does not.
@@ -700,6 +704,9 @@ export class Bridge {
           (route.epoch===undefined||route.epoch===(this.epochs.get(route.key)??0))}):undefined;
       let response,parsed,images=route.images;const replies=[];
       for(let round=0;round<5;round++){
+        if(controller.signal.aborted||generation!==this.generation)return;
+        ensureWorkspaceDirectory(this.runtime,session.workspace);
+        await dsh.ensureWorkspace?.(session.id,session.workspace);
         if(controller.signal.aborted||generation!==this.generation)return;
         modelPending=true;
         if(job.continuous)this.simulationClock(session).delivered();

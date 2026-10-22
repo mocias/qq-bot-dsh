@@ -49,6 +49,10 @@ flowchart TD
 
 模块通过状态读取函数访问 Bridge 的当前状态，避免记忆重置回滚替换状态对象后仍引用旧对象。队列、准入、取消确认与轮换回执验证仍由 Bridge 负责。
 
+0.25.1 起，`ensureWorkspaceDirectory` 在会话就绪、替换以及普通/维护模型提交前核对工作区。受管目录缺失时按原路径补建空目录，原会话绑定保持不变；缺失的外部目录及被文件、链接占用的受管路径在提交前报错，不恢复用户删除的文件。
+
+0.25.2 的 `repairWorkspaceMembership` 在配套插件中以原 Session header 验证工作目录，再恢复注册及成员关系，不创建 Agent。`memory-format.mjs` 只按既有短标题与系统记录修复 summary/date；`MemoryStore.commit` 在 digest 事务中保存修订和格式结果，当前状态的正文保护仍有效。
+
 ## 修改应落在哪里
 
 - 新增记忆查询或调整前后台查询语义：修改 `memory-tools.mjs`，再核对原生 schema、阶段允许名单与各调用者的权限门禁。证据写入和最终 digest 继续走原来的独立入口。

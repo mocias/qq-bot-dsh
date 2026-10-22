@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {revisionOf} from './memory-access.mjs';
 import {activePage} from './memory-state.mjs';
+import {repairMemoryMetadata} from './memory-format.mjs';
 
 export const ROLE_STATE_PAGE='concepts/character-state.md';
 const fields=['activity','mood','attention','progress','nextIntent'];
@@ -40,9 +41,11 @@ export class RoleState {
     let oldJournal=read(this.store,journal);
     if(oldJournal.length+entry.length>17000||!journal.includes(task.at.slice(0,10))||oldJournal&&!activePage(oldJournal)){journal=`concepts/character-history/${task.at.slice(0,10)}-${task.id}.md`;oldJournal='';}
     state.journal=journal;
-    const text=`---\ntitle: 当前人格状态\ntype: concepts\nsummary: 当前人格正式经历与状态，每次角色推演更新\nsalience: 1\nsource: role-simulation\n---\n\n# 当前人格状态\n\n以下为本人格的正式角色经历与状态，来源为角色推演；不证明群友经历或现实工具动作。\n${entry}\n<!-- role-state -->\n${JSON.stringify(state)}\n<!-- /role-state -->\n`;
+    const journalRevision=revisionOf(oldJournal);
+    if(oldJournal)oldJournal=repairMemoryMetadata(journal,oldJournal).text;
+    const text=`---\ntitle: 当前人格状态\ndate: ${task.at.slice(0,10)}\ntype: concepts\nsummary: 当前人格正式经历与状态，每次角色推演更新\nsalience: 1\nsource: role-simulation\n---\n\n# 当前人格状态\n\n以下为本人格的正式角色经历与状态，来源为角色推演；不证明群友经历或现实工具动作。\n${entry}\n<!-- role-state -->\n${JSON.stringify(state)}\n<!-- /role-state -->\n`;
     this.store.commit([{page:ROLE_STATE_PAGE,action:'write',text,reason:'保存本次人格状态',evidence:[task.id],expectedRevision:revisionOf(read(this.store,ROLE_STATE_PAGE))},
-      {page:journal,action:'write',text:(oldJournal||`---\ntitle: 人格经历 ${task.at.slice(0,10)}\ntype: concepts\nsummary: 角色推演形成的本人格正式经历，按时间追加\nsalience: 2\nsource: role-simulation\n---\n\n# 人格经历\n`)+entry,reason:'追加本次人格经历',evidence:[task.id],expectedRevision:revisionOf(oldJournal)}],
+      {page:journal,action:'write',text:(oldJournal||`---\ntitle: 人格经历 ${task.at.slice(0,10)}\ndate: ${task.at.slice(0,10)}\ntype: concepts\nsummary: 角色推演形成的本人格正式经历，按时间追加\nsalience: 2\nsource: role-simulation\n---\n\n# 人格经历\n`)+entry,reason:'追加本次人格经历',evidence:[task.id],expectedRevision:journalRevision}],
       {id:'role-simulation-'+task.id,evidenceIds:[task.id],roleStateRecord:state,summary:'角色推演：更新人格状态与正式经历'});
     delete this.session.roleSimulation;this.persist();
     return {saved:true,state,page:ROLE_STATE_PAGE,journal};

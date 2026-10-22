@@ -16,7 +16,7 @@ function compression(session,store,id,seq,time=1000000,error){
   observeCompaction(session,{type:'compaction/summary',seq,time,data:{compactionId:id,summary:[{type:'text',text:'用户喜欢红茶'}]}},store,()=>{});
   observeCompaction(session,{type:'compaction/end',seq:seq+1,time,data:{compactionId:id,...(error?{error}: {})}},store,()=>{});
 }
-function session(){const s={id:'old',blocked:false,route:{key,id:'234567',group:false},workspace:'same-workspace',preset:'private'};initializeLife(s,1000000);return s;}
+function session(workspace='same-workspace'){const s={id:'old',blocked:false,route:{key,id:'234567',group:false},workspace,preset:'private'};initializeLife(s,1000000);return s;}
 
 test('memory writes have evidence, survive restart, recall and forget, and cannot cross private/group stores',t=>{
   const runtime=temp(t),privateMemory=new MemoryStore(runtime,key),group=new MemoryStore(runtime,'123456/group/345678');
@@ -70,7 +70,7 @@ test('explicit lifecycle invalidation preserves undigested work and never publis
 });
 test('rotation survives restart during rename, reuses candidate and retains workspace, history and memory',async t=>{
   const runtime=temp(t),bridge=new Bridge(runtime,{now:()=>2800000});bridge.config={...defaults,privatePreset:'private'};bridge.generation=1;
-  const s=session();s.workspace=path.join(runtime,'original');const scope=bridge.scope(s.route);bridge.state.sessions[scope]=s;
+  const s=session(path.join(runtime,'original'));fs.mkdirSync(s.workspace);const scope=bridge.scope(s.route);bridge.state.sessions[scope]=s;
   const store=bridge.memory(key);store.commit([],{id:'digest-proof',evidenceIds:[],digest:true});
   let creates=0;bridge.dsh={async createSession(dir){creates++;assert.equal(dir,s.workspace);return'next';},async rename(){throw Error('temporary rename failure');}};
   await assert.rejects(bridge.rotate(scope,s,'digest-proof',0,1,new AbortController().signal));
@@ -84,7 +84,7 @@ test('rotation survives restart during rename, reuses candidate and retains work
 });
 test('arrival while a successor is being created keeps the current conversation',async t=>{
   const runtime=temp(t),bridge=new Bridge(runtime,{now:()=>2800000});bridge.config={...defaults,privatePreset:'private'};bridge.generation=1;
-  const s=session(),scope=bridge.scope(s.route);bridge.state.sessions[scope]=s;bridge.memory(key).commit([],{id:'proof',evidenceIds:[],digest:true});
+  const s=session(path.join(runtime,'workspaces','original')),scope=bridge.scope(s.route);bridge.state.sessions[scope]=s;bridge.memory(key).commit([],{id:'proof',evidenceIds:[],digest:true});
   let create;bridge.dsh={createSession(){return new Promise(resolve=>create=resolve);},rename(){assert.fail('cannot commit after arrival');}};
   const task=bridge.rotate(scope,s,'proof',0,1,new AbortController().signal);noteArrival(s,2800001);create('unused');await task;
   assert.equal(bridge.state.sessions[scope].id,'old');assert.equal(bridge.state.rotations.old.status,'pending');

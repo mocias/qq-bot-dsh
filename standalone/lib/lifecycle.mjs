@@ -83,7 +83,7 @@ export async function maintain({session,config,store,dsh,persist,now,isCurrent,s
       // Use the real host validator before acknowledging; the receipt also
       // allows recovery if the process exits before turn/end.
       store.commit(args.updates,{id,evidenceIds:sources,evidenceMessages,summary:args.summary,digest:true,maintenance:args.maintenance});
-      nativeDigest={reply:'',summary:args.summary,memory:args.updates,maintenance:args.maintenance};return {result:{saved:true}};
+      nativeDigest={reply:'',summary:args.summary,memory:args.updates,maintenance:args.maintenance};return {result:{saved:true,formatRepair:store.state.formatRepair}};
     }}:undefined;
     let text=await dsh.prompt(session.id,[
       '【记忆整合阶段】当前聊天会话暂时进行内部维护，不向 QQ 发送回复、通知、语音或文件，不执行桌面任务。只开放当前聊天的记忆查询、诊断、维护预览及最终提交。此前的持续等待规则在此阶段暂停；提交成功后结束本次维护回合，宿主取得保存回执后会在同一会话继续普通对话。不要调用等待或发送工具，不补答历史请求。',

@@ -68,7 +68,7 @@ try{
   if(nativeWasEnabled&&install?.bootstrapHash!==updated?.bootstrapHash){
     const dsh=new DshClient(readJson(path.join(runtime,'config.private.json'),{}));
     try{
-      const live=await reloadNativePlugin(dsh);
+      const live=await reloadNativePlugin(dsh,{profileFile:path.join(install.profile,'package.json')});
       if(live.version!==release.version||live.buildId!==release.buildId)throw Error('DSH插件入口重载后构建不一致');
     }finally{dsh.close();}
   }

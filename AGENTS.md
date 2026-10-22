@@ -192,6 +192,8 @@
 - 正式原生聊天统一使用持续对话，不提供旧模式开关。发送工具内经 Bridge.sendPlan 实际投递并返回逐条回执，不结束本轮；仅发送工具内容公开，普通正文不投递。不得把子任务原始通知直接发送QQ。迁移时忽略各层旧continuousChat开关，保留会话、记忆和权限；关闭消息查询不能关闭基本发送与等待。后台主动搭话/整理使用各自流程，不因正式对话升级而扩大权限。见 docs/CONTINUOUS-CHAT.md。
 - 引用/@ 与 record 不能混在同一气泡；拆分后的两条也必须经过统一出口的限额、取消和逐条回执。沉默仅按明确工具或完整占位标记处理，不删除正常正文中的词句。
 
+- 会话预设名必须显式配置（私聊与群聊各自一项）。留空会让 DSH 回退到自己的默认预设 `standard`，该预设带文件编辑、命令执行与子代理工具，与 `minimal` 的能力边界完全不同；不能用“空值等于沿用安全默认”来假设。
+- `DshClient.rpc` 的参数契约：`agentPresets/list`、`permissionPresets/catalog`、`pluginManager/listBundles`、`session/modelCatalog` 是无参方法，payload 的 `args` 必须是 `{}`；其余方法包一层 `{request: ...}`（`session/list` 用 `_request`）。多包或少包都会被 DSH 网关以 `gateway/arguments-invalid` 拒绝。
 - `native-dsh-plugin/` 是随服务更新的轻量 DSH bundle；原生工具回调仅限绑定的当前聊天与回合，最终发送仍经 `Bridge.sendPlan`。
 - 服务、插件和发布清单版本/构建必须一致，使用统一打包、激活与安装脚本。不得单独覆盖在线文件或在活动回合切换；更新保留禁用状态及私人数据。
 - 发布资产只包含脱敏源码和依赖，排除运行目录、账号、记忆、媒体及密钥。README 必须区分便携安装包、源码包、外部运行环境和已验证范围。

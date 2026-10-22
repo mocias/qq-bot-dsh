@@ -2,7 +2,7 @@
 
 开发入口：[当前逻辑地图](docs/ARCHITECTURE.md) · [结构整理与后续优先级](docs/REFACTOR-2026-10.md)。
 
-当前源码版本 **0.26.0-rc.5**，为本地 NapCat Shell 集成预览版。0.26.0-rc.3 已发布 GitHub Releases，rc.4 调整工作区命名，rc.5 增加 DSH 端口自动发现。两者均未打包发布。项目从固定官方来源自动准备并校验组件，不需要手动安装 NapCat/QQ 或填写其端口与令牌；Node.js 22+ 和 DSH 仍需另行安装。此前扫码失败后，用户现已自行登录成功，只读确认账号与 OneBot 在线。rc.3 在 rc.2 的组件完整性修复之上，增加按“全局→私聊/群聊→人格”覆盖的模型与上下文窗口配置、同一账号内复用他人人格卡（共享人设与记忆），并修复双击入口在 PowerShell 5.1 下的编码错误。rc.4 把新工作区按人格分配并简化为“北京时间日期-人格卡名称”；rc.5 让服务在 DSH 换端口后自动重新发现并写回地址。真实消息与媒体仍未验收。见 [rc.5 说明](docs/RELEASE-0.26.0-rc.5.md)、[rc.4 说明](docs/RELEASE-0.26.0-rc.4.md)、[rc.3 说明](docs/RELEASE-0.26.0-rc.3.md)、[模型与上下文窗口](docs/MODEL-PROFILES.md)、[共享人格](docs/SHARED-PERSONA.md)。
+当前源码版本 **0.26.0-rc.5**，为本地 NapCat Shell 集成预览版。0.26.0-rc.3 已发布 GitHub Releases，rc.4 调整工作区命名，rc.5 增加 DSH 端口自动发现。两者均已在本机部署，尚未上传 GitHub。项目从固定官方来源自动准备并校验组件，不需要手动安装 NapCat/QQ 或填写其端口与令牌；Node.js 22+ 和 DSH 仍需另行安装。此前扫码失败后，用户现已自行登录成功，只读确认账号与 OneBot 在线。rc.3 在 rc.2 的组件完整性修复之上，增加按“全局→私聊/群聊→人格”覆盖的模型与上下文窗口配置、同一账号内复用他人人格卡（共享人设与记忆），并修复双击入口在 PowerShell 5.1 下的编码错误。rc.4 把新工作区按人格分配并简化为“北京时间日期-人格卡名称”；rc.5 让服务在 DSH 换端口后自动重新发现并写回地址。真实消息与媒体仍未验收。见 [rc.5 说明](docs/RELEASE-0.26.0-rc.5.md)、[rc.4 说明](docs/RELEASE-0.26.0-rc.4.md)、[rc.3 说明](docs/RELEASE-0.26.0-rc.3.md)、[模型与上下文窗口](docs/MODEL-PROFILES.md)、[共享人格](docs/SHARED-PERSONA.md)。
 
 0.26.0-rc.2 修复登录生成数据库被误判为组件篡改，以及面板仅因在线便显示就绪的问题。见 [rc.2 说明](docs/RELEASE-0.26.0-rc.2.md)。
 
@@ -36,7 +36,7 @@
 
 ## 下载与安装
 
-本地预览包名为 `qq-bot-dsh-0.26.0-rc.5-windows-portable.zip`，解压后运行根目录 `open-panel.cmd`，按 `LOCAL-PREVIEW.md` 操作。0.26.0-rc.3 已发布 [GitHub Releases](https://github.com/mocias/qq-bot-dsh/releases/tag/v0.26.0-rc.3)，提供源码包、Windows 便携包与 `SHA256SUMS.txt`，下载后先核对摘要。rc.4 已在本机部署但未发布，rc.5 增加 DSH 端口自动发现，两者均未上传 GitHub。以下正式部署命令仅供后续手动安装/切换时使用，打包不会自动执行。这是 Windows 便携安装包，包含服务、轻量插件、启动/更新脚本及服务的 Node 依赖；不是包含全部环境的 EXE。Node.js 22+ 与 DSH 桌面版需要另行安装。QQ/NapCat 二进制不随发行包提供；Shell 接入可在面板点击准备后从固定官方来源下载并校验包含 Node、QQ native runtime 的 NapCat 包，使用外部接入则需配置已有的 OneBot 服务。压缩包不包含任何账号、密钥、聊天记录、私人记忆或语音模型。
+本地预览包名为 `qq-bot-dsh-0.26.0-rc.5-windows-portable.zip`，解压后运行根目录 `open-panel.cmd`，按 `LOCAL-PREVIEW.md` 操作。0.26.0-rc.3 已发布 [GitHub Releases](https://github.com/mocias/qq-bot-dsh/releases/tag/v0.26.0-rc.3)，提供源码包、Windows 便携包与 `SHA256SUMS.txt`，下载后先核对摘要。rc.4 与 rc.5 均已在本机部署，但都未上传 GitHub；rc.5 额外提供 DSH 端口自动发现。以下正式部署命令仅供后续手动安装/切换时使用，打包不会自动执行。这是 Windows 便携安装包，包含服务、轻量插件、启动/更新脚本及服务的 Node 依赖；不是包含全部环境的 EXE。Node.js 22+ 与 DSH 桌面版需要另行安装。QQ/NapCat 二进制不随发行包提供；Shell 接入可在面板点击准备后从固定官方来源下载并校验包含 Node、QQ native runtime 的 NapCat 包，使用外部接入则需配置已有的 OneBot 服务。压缩包不包含任何账号、密钥、聊天记录、私人记忆或语音模型。
 
 先将压缩包解压到一个新的版本目录，例如 `C:\QQRSI\releases\0.26.0-rc.5`，进入该目录执行：
 

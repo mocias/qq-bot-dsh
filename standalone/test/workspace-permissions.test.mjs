@@ -6,6 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import {once} from 'node:events';
 import {workspaceFor} from '../lib/workspace.mjs';
+import {PersonaCards} from '../lib/persona-cards.mjs';
 import {Bridge} from '../lib/bridge.mjs';
 import {DshClient} from '../lib/dsh.mjs';
 import {validate,defaults} from '../lib/config.mjs';
@@ -13,17 +14,26 @@ import {resolveChatConfig} from '../lib/chat-policy.mjs';
 
 function temp(t){const p=fs.mkdtempSync(path.join(os.tmpdir(),'qq-workspace-'));t.after(()=>fs.rmSync(p,{recursive:true,force:true}));return p;}
 const key='100000001/private/100000002',route={key,id:'100000002',sender:'100000002',group:false,text:'我长期喜欢喝茶',messageId:'input-1'};
-test('workspace names use the Beijing creation date and persona, persist across dates and isolate bot/chats/generations',t=>{
+test('workspace names use the Beijing creation date and persona, are shared per persona and isolate bots and generations',t=>{
  const root=temp(t),state={sessions:{}},now=Date.parse('2026-10-20T16:01:00Z'),persist=()=>{};
  const first=workspaceFor(root,state,route,'scope1',now,persist);
  assert.equal(path.basename(first),'2026-10-21-默认人格');
  assert.equal(workspaceFor(root,state,route,'scope1',now+86400000,persist),first);
- const group={...route,key:'100000001/group/100000002',group:true};
+ // A private and a group chat that reuse one persona share a single workspace.
+ const cards=new PersonaCards(root),groupKey='100000001/group/100000002';
+ const ref=cards.reuse({key:groupKey,sourceKey:key,sourcePersonaId:'default',revision:0});
+ const group={...route,key:groupKey,group:true,personaId:ref.id};
+ assert.equal(workspaceFor(root,state,group,'group',now,persist),first);
+ // An independent persona (own default card) and another bot stay separate.
+ const own={...route,key:'100000001/group/100000004',group:true};
+ assert.notEqual(workspaceFor(root,state,own,'own',now,persist),first);
  const other={...route,key:'100000003/private/100000002'};
- assert.notEqual(workspaceFor(root,state,group,'group',now,persist),first);
  assert.notEqual(workspaceFor(root,state,other,'bot',now,persist),first);
- const reset=workspaceFor(root,state,route,'reset-scope',now,persist);
- assert.notEqual(reset,first);assert.notEqual(path.basename(reset),path.basename(first));assert.ok(path.basename(reset).startsWith(path.basename(first)));
+ // Deleting the shared directory allocates one replacement that the sibling chat adopts.
+ fs.rmSync(first,{recursive:true,force:true});
+ const replaced=workspaceFor(root,state,route,'scope1',now,persist,{fresh:true});
+ assert.notEqual(replaced,first);assert.ok(path.basename(replaced).startsWith('2026-10-21-默认人格'));
+ assert.equal(workspaceFor(root,state,group,'group',now,persist),replaced);
  const old=path.join(root,'workspaces','oldhash');fs.mkdirSync(old,{recursive:true});fs.writeFileSync(path.join(old,'keep.txt'),'keep');
  assert.equal(workspaceFor(root,state,route,'oldhash',now,persist),old);assert.equal(fs.readFileSync(path.join(old,'keep.txt'),'utf8'),'keep');
 });

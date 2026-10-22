@@ -42,19 +42,33 @@ export function ensureWorkspaceDirectory(runtime,workspace,{create=false}={}){
 export function workspaceFor(runtime,state,route,scope,now,persist,{fresh=false}={}){
   if(!/^\d{5,20}\/(?:private|group)\/\d{5,20}$/.test(route.key))throw Error('工作区聊天范围无效');
   const mappings=state.workspaces??={};
+  const identity=personaIdentity(runtime,route.key,route.personaId);
+  // One workspace per persona: every chat that reuses a persona shares the same
+  // directory, and the session titles inside carry the chat type and peer.
+  const shared=state.personaWorkspaces??={};
   const existing=state.sessions[scope]?.workspace??mappings[scope];
-  if(existing&&!fresh){try{return ensureWorkspaceDirectory(runtime,existing);}catch(error){if(!error.workspaceMissing)throw error;fresh=true;}}
+  if(existing&&!fresh){
+    try{const kept=ensureWorkspaceDirectory(runtime,existing);mappings[scope]=kept;shared[identity.memoryScope]??=kept;persist();return kept;}
+    catch(error){if(!error.workspaceMissing)throw error;fresh=true;}
+  }
   // Preserve legacy directories and their DSH references in place.
   const legacy=path.join(runtime,'workspaces',scope);
-  if(!fresh&&fs.existsSync(legacy)){ensureWorkspaceDirectory(runtime,legacy);mappings[scope]=legacy;persist();return legacy;}
+  if(!fresh&&fs.existsSync(legacy)){ensureWorkspaceDirectory(runtime,legacy);mappings[scope]=legacy;shared[identity.memoryScope]??=legacy;persist();return legacy;}
+  // Adopt the persona's live directory, except when this chat's own workspace was
+  // deliberately abandoned (deleted registration): then a new path is required.
+  const sharedDir=shared[identity.memoryScope];
+  const abandoning=!!(fresh&&sharedDir&&existing&&path.resolve(existing).toLowerCase()===path.resolve(sharedDir).toLowerCase());
+  if(sharedDir&&!abandoning){
+    try{const kept=ensureWorkspaceDirectory(runtime,sharedDir);mappings[scope]=kept;persist();return kept;}
+    catch(error){if(!error.workspaceMissing)throw error;delete shared[identity.memoryScope];}
+  }
   const [bot]=route.key.split('/');
-  const {personaName}=personaIdentity(runtime,route.key,route.personaId);
   // The workspace name carries only the creation date and the persona. Chat type
   // and peer stay on the DSH session title inside it, so the folder stays readable.
-  const parent=path.join(runtime,'workspaces',bot),name=[beijingDate(now),workspacePersonaName(personaName)].join('-');
+  const parent=path.join(runtime,'workspaces',bot),name=[beijingDate(now),workspacePersonaName(identity.personaName)].join('-');
   let dir=path.join(parent,name),number=1;
-  const used=new Set([...Object.values(mappings),...Object.values(state.sessions??{}).map(s=>s.workspace),...(state.retired??[]).map(s=>s.workspace)].filter(Boolean).map(x=>path.resolve(x).toLowerCase()));
+  const used=new Set([...Object.values(mappings),...Object.values(shared),...Object.values(state.sessions??{}).map(s=>s.workspace),...(state.retired??[]).map(s=>s.workspace)].filter(Boolean).map(x=>path.resolve(x).toLowerCase()));
   while(fs.existsSync(dir)||used.has(path.resolve(dir).toLowerCase()))dir=path.join(parent,name+'-工作区'+(++number));
   ensureWorkspaceDirectory(runtime,dir,{create:true});
-  mappings[scope]=dir;persist();return dir;
+  mappings[scope]=dir;shared[identity.memoryScope]=dir;persist();return dir;
 }
